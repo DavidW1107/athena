@@ -157,8 +157,19 @@ pub fn list_instances() -> Vec<InstanceView> {
     out
 }
 
+/// Start an instance.
+///
+/// `group` is the tile it joins. `Some(g)` puts it in that exact tile, which is what a tile's
+/// own + button asks for. `None` means "give me my own tile": the repo name is still the base,
+/// but it is made unique, so launching twice in one repo from the header yields two tiles
+/// rather than a second tab in the first.
 #[tauri::command]
-pub fn launch(cwd: String, cmd: String, name: String) -> Result<InstanceView, String> {
+pub fn launch_in(
+    cwd: String,
+    cmd: String,
+    name: String,
+    group: Option<String>,
+) -> Result<InstanceView, String> {
     if !PathBuf::from(&cwd).is_dir() {
         return Err(format!("no such directory: {}", cwd));
     }
@@ -170,8 +181,12 @@ pub fn launch(cwd: String, cmd: String, name: String) -> Result<InstanceView, St
         .unwrap_or(cwd);
     let id = format!("{:x}", SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0) % 0xffff_ffff);
     let sess = sess_name(&id);
-    let group = git_group(&cwd);
-    let name = if name.trim().is_empty() { group.clone() } else { name };
+    let reg_now = read_reg();
+    let group = match group {
+        Some(g) if !g.trim().is_empty() => g,
+        _ => unique_group(&git_group(&cwd), &reg_now),
+    };
+    let name = if name.trim().is_empty() { git_group(&cwd) } else { name };
 
     let ok = tmux(&[
         "new-session", "-d", "-s", &sess, "-c", &cwd,
@@ -306,19 +321,34 @@ pub fn send_key(id: String, key: String) -> Result<(), String> {
 
 /// Two levels under the GitHub root, which is exactly how the buckets are laid out
 /// (clients/, internal/, tools/, demos/, personal/). Keeps the launcher a fuzzy pick.
+/// A directory worth offering in the launcher: a real directory, not hidden.
+///
+/// Hidden directories used to be included, and because "." sorts before every letter,
+/// `GitHub/.claude` became the first entry and therefore the launcher's default. Every
+/// instance launched without touching the field landed there.
+fn offerable(path: &std::path::Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    match path.file_name().and_then(|n| n.to_str()) {
+        Some(n) => !n.starts_with('.') && n != "node_modules",
+        None => false,
+    }
+}
+
 #[tauri::command]
 pub fn list_repos() -> Vec<String> {
     let root = home().join("Documents").join("GitHub");
     let mut out = Vec::new();
     if let Ok(rd) = fs::read_dir(&root) {
         for e in rd.flatten() {
-            if !e.path().is_dir() {
+            if !offerable(&e.path()) {
                 continue;
             }
             out.push(e.path().to_string_lossy().to_string());
             if let Ok(rd2) = fs::read_dir(e.path()) {
                 for e2 in rd2.flatten() {
-                    if e2.path().is_dir() {
+                    if offerable(&e2.path()) {
                         out.push(e2.path().to_string_lossy().to_string());
                     }
                 }
@@ -327,4 +357,19 @@ pub fn list_repos() -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// A group name nothing else is using, so a launch that asked for its own tile gets one.
+/// Grouping is still derived from the repo; this only disambiguates a second tile for it.
+fn unique_group(base: &str, reg: &[Instance]) -> String {
+    if !reg.iter().any(|i| i.group == base) {
+        return base.to_string();
+    }
+    for n in 2..1000 {
+        let candidate = format!("{} {}", base, n);
+        if !reg.iter().any(|i| i.group == candidate) {
+            return candidate;
+        }
+    }
+    format!("{} {}", base, now())
 }

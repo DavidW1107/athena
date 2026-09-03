@@ -27,7 +27,7 @@ const $ = (s) => document.querySelector(s);
 let launcher = null;
 
 const grid = mountGrid($('#grid-host'), {
-  onNewInTile: ({ cwd, cmd }) => launcher?.open({ cwd, cmd }),
+  onNewInTile: ({ group, cwd, cmd }) => launcher?.open({ group, cwd, cmd }),
 });
 
 /** Bring an instance into view by focusing the tile its group owns. */

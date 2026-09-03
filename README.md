@@ -117,10 +117,9 @@ above the terminal's own `#CCCCCC`, so it reads in front of the output. Every st
 WCAG AA on `#1E1E1E`. That palette file also carries a `[Light]` section
 (`Background=#F9F9F9`), so a light variant is a `:root` swap away if it is ever wanted.
 
-**Per-tile controls.** Each tile header carries a `+` that launches straight into that group.
-Grouping stays derived from the git repo, so handing the launcher that tile's directory is all it
-takes for the new instance to land back in the same tile; the launcher itself knows nothing about
-groups. A new repo therefore becomes a new tile on its own.
+**Per-tile controls.** Each tile header carries a `+` that launches into that tile. The header's
+`+ instance` does the opposite: it always gives the new instance its own tile, appending a counter
+when the repo already has one, so "acmr-crm" and "acmr-crm 2" can sit side by side.
 
 **Resize and zoom.** Drag a tile's bottom-right grip to resize it, snapping to whole grid cells so
 the grid stays gapless: a free pixel size would take the tile out of its track and leave holes

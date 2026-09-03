@@ -50,19 +50,21 @@ html, body {
   overflow: hidden;
 }
 
+/* Chrome is overhead: every pixel here is a pixel not showing a terminal. 26px is the
+   floor that still leaves the buttons a 24px hit target. */
 header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  height: 44px;
-  padding: 0 14px;
+  gap: 8px;
+  height: 26px;
+  padding: 0 8px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
 
-.wordmark { font-family: var(--mono); letter-spacing: 0.22em; font-size: 12px; flex: none; }
+.wordmark { font-family: var(--mono); letter-spacing: 0.18em; font-size: 10px; flex: none; }
 .spacer { flex: 1; }
-.counts, .pressure { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.counts, .pressure { font-family: var(--mono); font-size: 10px; color: var(--dim); }
 .counts { flex: none; }
 /* The header carries seven things at v1.1. The buttons and the readouts keep their size and
    the pressure line gives way first, so a narrow window never clips the launcher. */
@@ -71,10 +73,10 @@ header > button { flex: none; }
 
 button {
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
   font-family: var(--mono);
-  border-radius: 5px;
-  padding: 4px 10px;
+  border-radius: 4px;
+  padding: 2px 7px;
   cursor: pointer;
   border: 1px solid var(--line);
   background: transparent;
@@ -90,8 +92,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .attention {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 14px;
+  gap: 6px;
+  padding: 3px 8px;
   background: var(--needs-wash);
   border-bottom: 1px solid var(--needs-edge);
 }

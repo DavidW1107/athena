@@ -29,7 +29,7 @@ fn main() {
         .manage(PtyStore::default())
         .invoke_handler(tauri::generate_handler![
             registry::list_instances,
-            registry::launch,
+            registry::launch_in,
             registry::restore,
             registry::close,
             registry::set_paused,

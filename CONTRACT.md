@@ -716,3 +716,21 @@ Three `localStorage` keys, all keyed by group and all failing soft to an empty o
 `athena.tileFont` (`{group: px}`, clamped 8 to 24, default 12.5).
 
 The grid returns `zoom(group, step)` and `resetZoom(group)` alongside `focusGroup`.
+
+## v1.5 corrections
+
+`list_repos` skips hidden directories and `node_modules`. Previously it did not, so
+`GitHub/.claude` sorted first and silently became the launcher's default directory; every
+instance launched without touching the field landed there.
+
+`registry::launch` is now `registry::launch_in(cwd, cmd, name, group: Option<String>)`.
+`None` gives the instance its OWN tile: the repo name is the base and `unique_group` appends a
+counter when that name is taken. `Some(g)` joins tile `g` exactly, which is what a tile's `+`
+sends. `sessions::resume_session` passes `None`, since a resumed conversation is a new instance.
+The JS wrapper keeps the name `launch(cwd, cmd, name, group = null)`.
+
+`.tile-tabs` hides its scrollbar (`scrollbar-width: none` plus the WebKit pseudo-element) and
+tabs are `flex: 0 1 auto` with `min-width: 0`, so they shrink and ellipsize before the strip
+scrolls. A visible scrollbar in a short strip sat on top of the tabs and swallowed the click.
+
+Chrome heights: header 26px, tile header 22px min, grid gap and padding 6px.

@@ -45,7 +45,12 @@ export const stateColor = (s) => STATE_COLOR[s] || 'var(--idle)';
 export const listInstances = () => invoke('list_instances');
 
 /** @returns {Promise<Object>} the new InstanceView. Rejects with a string on failure. */
-export const launch = (cwd, cmd, name) => invoke('launch', { cwd, cmd, name });
+/**
+ * Start an instance. `group` null means "give it its own tile"; passing a group name puts it
+ * in that exact tile, which is what a tile's own + asks for.
+ */
+export const launch = (cwd, cmd, name, group = null) =>
+  invoke('launch_in', { cwd, cmd, name, group });
 
 /** Re-create a dead tmux session, resuming its Claude conversation when one is known. */
 export const restore = (id) => invoke('restore', { id });

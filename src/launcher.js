@@ -28,6 +28,10 @@ export function mountLauncher({ dialog, openBtn, fields = {}, onLaunched }) {
   };
   const q = (s) => document.querySelector(s);
 
+  // Which tile asked for this launch. A tile's + sets it so the instance joins that tile;
+  // the header + leaves it null, which means the backend gives the instance its own tile.
+  let pendingGroup = null;
+
   /**
    * Open the launcher, optionally prefilled.
    *
@@ -35,9 +39,10 @@ export function mountLauncher({ dialog, openBtn, fields = {}, onLaunched }) {
    * the same directory is all it takes for the instance to land back in the same tile; the
    * launcher needs no concept of groups at all.
    *
-   * @param {{ cwd?: string, cmd?: string, name?: string }} [prefill]
+   * @param {{ cwd?: string, cmd?: string, name?: string, group?: string }} [prefill]
    */
   async function open(prefill = {}) {
+    pendingGroup = prefill.group || null;
     const repos = await listRepos();
     q(sel.repos).replaceChildren(
       ...repos.map((r) => Object.assign(document.createElement('option'), { value: r }))
@@ -61,7 +66,7 @@ export function mountLauncher({ dialog, openBtn, fields = {}, onLaunched }) {
     if (!cwd) return;
     localStorage.setItem(LAST_CWD, cwd);
     try {
-      const v = await launch(cwd, q(sel.cmd).value, q(sel.name).value.trim());
+      const v = await launch(cwd, q(sel.cmd).value, q(sel.name).value.trim(), pendingGroup);
       q(sel.name).value = '';
       await store.refresh();
       onLaunched?.(v.id);
