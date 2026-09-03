@@ -160,3 +160,40 @@
   .tile-dot[data-state='needs-you'] { animation: none; }
   .tile.dragging { opacity: 1; }
 }
+
+/* Per-group launch button. Sits between the tabs and the actions so it reads as "add to
+   this strip" rather than as another action on the active instance. */
+.tile-plus {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 1;
+  font-size: 14px;
+  color: var(--dim);
+}
+
+.tile-plus:hover:not(:disabled) { color: var(--ink); }
+
+/* Resize grip. Snaps to whole grid cells; see applySpan in grid.js for why. */
+.tile-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  /* Two hairlines rather than an icon: visible enough to find, quiet enough to ignore. */
+  background:
+    linear-gradient(135deg, transparent 0 48%, var(--line-strong) 48% 56%, transparent 56%),
+    linear-gradient(135deg, transparent 0 72%, var(--line-strong) 72% 80%, transparent 80%);
+  touch-action: none;
+}
+
+.tile { position: relative; }
+
+.tile-grip:hover {
+  background:
+    linear-gradient(135deg, transparent 0 48%, var(--ink) 48% 56%, transparent 56%),
+    linear-gradient(135deg, transparent 0 72%, var(--ink) 72% 80%, transparent 80%);
+}

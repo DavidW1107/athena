@@ -117,6 +117,17 @@ above the terminal's own `#CCCCCC`, so it reads in front of the output. Every st
 WCAG AA on `#1E1E1E`. That palette file also carries a `[Light]` section
 (`Background=#F9F9F9`), so a light variant is a `:root` swap away if it is ever wanted.
 
+**Per-tile controls.** Each tile header carries a `+` that launches straight into that group.
+Grouping stays derived from the git repo, so handing the launcher that tile's directory is all it
+takes for the new instance to land back in the same tile; the launcher itself knows nothing about
+groups. A new repo therefore becomes a new tile on its own.
+
+**Resize and zoom.** Drag a tile's bottom-right grip to resize it, snapping to whole grid cells so
+the grid stays gapless: a free pixel size would take the tile out of its track and leave holes
+around it. Ctrl and the wheel over a terminal changes that terminal's font size only, as do
+ctrl-plus, ctrl-minus and ctrl-0 to reset. Both the span and the font size are remembered per tile
+alongside the tile order, in `localStorage`.
+
 **Desktop launcher.**
 
     npm run tauri build -- --no-bundle

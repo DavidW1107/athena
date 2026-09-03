@@ -15,6 +15,32 @@ import { MIME_TILE, dragPayload, isDroppable } from './dnd.js';
 import './grid.css';
 
 const ORDER_KEY = 'athena.tileOrder';
+const SPANS_KEY = 'athena.tileSpans';
+const FONT_KEY = 'athena.tileFont';
+
+const MAX_SPAN_X = 4;
+const MAX_SPAN_Y = 3;
+const MIN_FONT = 8;
+const MAX_FONT = 24;
+const DEFAULT_FONT = 12.5;
+
+/** Small keyed maps of per-tile preferences, all failing soft to an empty object. */
+function readMap(key) {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || '{}');
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeMap(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // A full or blocked localStorage costs a remembered preference and nothing else.
+  }
+}
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -55,6 +81,8 @@ export function mountGrid(host, opts = {}) {
   /** @type {Map<string, any>} */
   const tiles = new Map();
   let order = readOrder();
+  let spans = readMap(SPANS_KEY);
+  let fonts = readMap(FONT_KEY);
   let destroyed = false;
   let dragging = null;
 
@@ -74,8 +102,20 @@ export function mountGrid(host, opts = {}) {
     const tabs = el('div', 'tile-tabs');
     tabs.setAttribute('role', 'tablist');
     tabs.setAttribute('aria-label', `instances in ${group}`);
+    // Launch straight into THIS group. Grouping is by repo, so handing the launcher this
+    // tile's directory is all it takes for the new instance to land back in this tile.
+    const plus = el('button', 'tile-plus', '+');
+    plus.type = 'button';
+    plus.title = `new instance in ${group}`;
+    plus.setAttribute('aria-label', `new instance in ${group}`);
+    plus.onclick = (e) => {
+      e.stopPropagation();
+      const any = store.getInstances().find((i) => i.group === group);
+      opts.onNewInTile?.({ group, cwd: any ? any.cwd : '', cmd: any ? any.cmd : '' });
+    };
+
     const actions = el('div', 'tile-actions');
-    head.append(title, tabs, actions);
+    head.append(title, tabs, plus, actions);
 
     const body = el('div', 'tile-body');
     const termHost = el('div', 'tile-term');
@@ -83,7 +123,46 @@ export function mountGrid(host, opts = {}) {
     msg.hidden = true;
     body.append(termHost, msg);
 
-    root.append(head, body);
+    // Resize by whole grid cells. Snapping is what keeps the grid gapless: a free pixel
+    // size would take the tile out of the track and leave holes around it.
+    const grip = el('div', 'tile-grip');
+    grip.title = 'drag to resize by whole cells';
+    grip.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      grip.setPointerCapture(e.pointerId);
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const rect = root.getBoundingClientRect();
+      const move = (ev) => {
+        const { colW, rowH, colCount } = cellMetrics();
+        const sx = clamp(Math.round((rect.width + ev.clientX - startX) / colW), 1, Math.min(MAX_SPAN_X, colCount));
+        const sy = clamp(Math.round((rect.height + ev.clientY - startY) / rowH), 1, MAX_SPAN_Y);
+        applySpan(group, sx, sy);
+      };
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        writeMap(SPANS_KEY, spans);
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+    });
+
+    // Ctrl and the wheel is the terminal zoom, scoped to THIS terminal. Without
+    // preventDefault the webview zooms the entire window instead, which is not what a
+    // per-terminal size control should do.
+    body.addEventListener(
+      'wheel',
+      (e) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        bumpFont(group, e.deltaY < 0 ? 1 : -1);
+      },
+      { passive: false }
+    );
+
+    root.append(head, body, grip);
 
     head.addEventListener('dragstart', (e) => {
       dragging = group;
@@ -124,6 +203,17 @@ export function mountGrid(host, opts = {}) {
       reorder(from, group);
     });
 
+    // Keyboard equivalent of the ctrl-wheel zoom, so the size control is reachable without
+    // a pointer. Bound on the tile so it applies to whichever terminal has focus.
+    root.addEventListener('keydown', (e) => {
+      if (!e.ctrlKey) return;
+      if (e.key === '=' || e.key === '+') bumpFont(group, 1);
+      else if (e.key === '-' || e.key === '_') bumpFont(group, -1);
+      else if (e.key === '0') resetFont(group);
+      else return;
+      e.preventDefault();
+    });
+
     // Clicking anywhere that is not a control focuses this tile's terminal, which is also
     // what makes it the selected instance for auto-pause and handoff.
     root.addEventListener('click', (e) => {
@@ -140,6 +230,7 @@ export function mountGrid(host, opts = {}) {
       actions,
       termHost,
       msg,
+      grip,
       term: null,
       activeId: null,
       chain: Promise.resolve(),
@@ -193,7 +284,9 @@ export function mountGrid(host, opts = {}) {
         await tile.term?.detach();
         return;
       }
-      if (!tile.term) tile.term = createTerm(tile.termHost, opts.term);
+      if (!tile.term) {
+        tile.term = createTerm(tile.termHost, { ...opts.term, fontSize: fontFor(tile.group) });
+      }
       let ok = false;
       let why = 'attach failed';
       try {
@@ -222,6 +315,65 @@ export function mountGrid(host, opts = {}) {
     }
     tile.msg.hidden = false;
     tile.termHost.hidden = true;
+  }
+
+  // ---------------------------------------------------------------- size and zoom
+
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+
+  /** One grid cell plus one gap, read off the live computed grid rather than assumed. */
+  function cellMetrics() {
+    const cs = getComputedStyle(grid);
+    const cols = cs.gridTemplateColumns.split(' ').map(parseFloat).filter((n) => n > 0);
+    const rows = cs.gridTemplateRows.split(' ').map(parseFloat).filter((n) => n > 0);
+    const gap = parseFloat(cs.rowGap) || 0;
+    return {
+      colW: (cols[0] || 460) + gap,
+      rowH: (rows[0] || 300) + gap,
+      colCount: Math.max(1, cols.length),
+    };
+  }
+
+  function applySpan(group, sx, sy) {
+    const tile = tiles.get(group);
+    if (!tile) return;
+    spans[group] = [sx, sy];
+    tile.root.style.gridColumn = sx > 1 ? `span ${sx}` : '';
+    tile.root.style.gridRow = sy > 1 ? `span ${sy}` : '';
+    // term.js observes its own mount element, so the refit follows from the layout change.
+  }
+
+  function restoreSpan(group) {
+    const s = spans[group];
+    if (Array.isArray(s) && s.length === 2) applySpan(group, s[0], s[1]);
+  }
+
+  function fontFor(group) {
+    const n = Number(fonts[group]);
+    return Number.isFinite(n) ? clamp(n, MIN_FONT, MAX_FONT) : DEFAULT_FONT;
+  }
+
+  function bumpFont(group, step) {
+    const tile = tiles.get(group);
+    if (!tile) return;
+    const next = clamp(fontFor(group) + step, MIN_FONT, MAX_FONT);
+    if (next === fontFor(group)) return;
+    fonts[group] = next;
+    writeMap(FONT_KEY, fonts);
+    if (tile.term) {
+      tile.term.term.options.fontSize = next;
+      tile.term.fit();
+    }
+  }
+
+  function resetFont(group) {
+    delete fonts[group];
+    writeMap(FONT_KEY, fonts);
+    const tile = tiles.get(group);
+    if (tile?.term) {
+      tile.term.term.options.fontSize = DEFAULT_FONT;
+      tile.term.fit();
+    }
   }
 
   function focusTile(group) {
@@ -324,6 +476,7 @@ export function mountGrid(host, opts = {}) {
     for (const g of groups) {
       if (tiles.has(g)) continue;
       tiles.set(g, buildTile(g));
+      restoreSpan(g);
       added = true;
     }
 
@@ -349,6 +502,8 @@ export function mountGrid(host, opts = {}) {
 
   return {
     focusGroup: focusTile,
+    zoom: bumpFont,
+    resetZoom: resetFont,
     async destroy() {
       destroyed = true;
       store.unsubscribe(sync);

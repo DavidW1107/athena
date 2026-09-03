@@ -23,7 +23,12 @@ const $ = (s) => document.querySelector(s);
 
 // ------------------------------------------------------------------ the grid
 
-const grid = mountGrid($('#grid-host'));
+// Declared before the grid so the tile + can reach the launcher, which is mounted below.
+let launcher = null;
+
+const grid = mountGrid($('#grid-host'), {
+  onNewInTile: ({ cwd, cmd }) => launcher?.open({ cwd, cmd }),
+});
 
 /** Bring an instance into view by focusing the tile its group owns. */
 function reveal(id) {
@@ -57,7 +62,7 @@ panel('#panel-sessions', '#open-sessions', () => sessions.render());
 panel('#panel-codex', '#open-codex', () => codex.render());
 panel('#panel-handoff', '#open-handoff');
 
-mountLauncher({ dialog: $('#launcher'), openBtn: $('#new'), onLaunched: reveal });
+launcher = mountLauncher({ dialog: $('#launcher'), openBtn: $('#new'), onLaunched: reveal });
 mountAdopt({ dialog: $('#adopter'), openBtn: $('#adopt'), onAdopted: reveal });
 
 // ------------------------------------------------------------------ header

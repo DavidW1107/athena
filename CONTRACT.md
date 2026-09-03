@@ -704,3 +704,15 @@ New tokens in `:root`: `--panel-2` (tile header), `--hover`, `--line-strong`, `-
 `--needs` remains the only rationed accent. `THEME` in `src/term.js` carries the literal xterm
 palette, which is the one place a hex is allowed because xterm paints to a canvas and cannot read
 a CSS custom property; keep it in step with `--bg` and `--ink`.
+
+## v1.4 per-tile state
+
+`mountGrid(host, opts)` gains `opts.onNewInTile({ group, cwd, cmd })`, fired by a tile's `+`.
+`mountLauncher(...).open({ cwd, cmd, name })` accepts a prefill; a command is only preselected
+when the dropdown actually offers it, since an adopted instance's command can be anything.
+
+Three `localStorage` keys, all keyed by group and all failing soft to an empty object:
+`athena.tileOrder` (array), `athena.tileSpans` (`{group: [cols, rows]}`, capped 4 by 3) and
+`athena.tileFont` (`{group: px}`, clamped 8 to 24, default 12.5).
+
+The grid returns `zoom(group, step)` and `resetZoom(group)` alongside `focusGroup`.

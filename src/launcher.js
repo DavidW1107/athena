@@ -28,16 +28,32 @@ export function mountLauncher({ dialog, openBtn, fields = {}, onLaunched }) {
   };
   const q = (s) => document.querySelector(s);
 
-  async function open() {
+  /**
+   * Open the launcher, optionally prefilled.
+   *
+   * A tile's + button passes that tile's directory. Grouping is by repo, so launching into
+   * the same directory is all it takes for the instance to land back in the same tile; the
+   * launcher needs no concept of groups at all.
+   *
+   * @param {{ cwd?: string, cmd?: string, name?: string }} [prefill]
+   */
+  async function open(prefill = {}) {
     const repos = await listRepos();
     q(sel.repos).replaceChildren(
       ...repos.map((r) => Object.assign(document.createElement('option'), { value: r }))
     );
-    q(sel.cwd).value = localStorage.getItem(LAST_CWD) || repos[0] || '';
+    q(sel.cwd).value = prefill.cwd || localStorage.getItem(LAST_CWD) || repos[0] || '';
+    if (prefill.cmd) {
+      const cmdEl = q(sel.cmd);
+      // Only preselect a command the dropdown actually offers; an adopted instance's
+      // command can be anything that was running in the session Athena took over.
+      if ([...cmdEl.options].some((o) => o.value === prefill.cmd)) cmdEl.value = prefill.cmd;
+    }
+    q(sel.name).value = prefill.name || '';
     dialog.showModal();
   }
 
-  if (openBtn) openBtn.onclick = open;
+  if (openBtn) openBtn.onclick = () => open();
 
   dialog.addEventListener('close', async () => {
     if (dialog.returnValue !== 'go') return;
