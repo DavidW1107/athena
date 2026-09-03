@@ -1,94 +1,69 @@
-// CONVERGENCE POINT. Wiring only: create the store, mount each panel onto its
-// element, start the polls. No feature logic lives here, and a feature shard never
-// edits this file - integration adds its import and its one mount call below.
+// CONVERGENCE POINT. Wiring only: create the store, mount each panel onto its element,
+// start the polls. No feature logic lives here.
+//
+// v1.3 shape: the whole window is the tile grid. There is no sidebar and no single stage
+// terminal, because the fleet is meant to be readable at a glance rather than clicked
+// through. Everything that used to justify a permanent left rail is now a header button
+// that opens a dialog, so it costs screen only while it is open.
 
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 
 import { pbuildResumeAll } from './api.js';
 import * as store from './store.js';
-import { createTerm } from './term.js';
-import { mountAttention, mountCards, mountCodex, mountCounts, mountSessions, mountStageBar } from './cards.js';
+import { mountAttention, mountCodex, mountCounts, mountSessions } from './cards.js';
+import { mountGrid } from './grid.js';
 import { mountLauncher } from './launcher.js';
 import { mountAdopt } from './adopt.js';
 import { mountAutopause } from './autopause.js';
 import { mountBroadcast } from './broadcast.js';
 import { mountCost } from './cost.js';
 import { mountHandoff } from './handoff.js';
-import { mountPanes } from './panes.js';
 
 const $ = (s) => document.querySelector(s);
 
-// ------------------------------------------------------------------ terminal
+// ------------------------------------------------------------------ the grid
 
-const term = createTerm($('#term'));
+const grid = mountGrid($('#grid-host'));
 
-// Exactly one thing owns the ptys: either this single stage terminal or the split grid,
-// never both. pty.rs keys one pty per instance id, so a hidden #term still attached to an
-// id a pane also holds would make that pane's detach kill the shared pty, and this file's
-// `attachedId === id` guard would then refuse to bring it back. `panes` non-null means the
-// grid owns every attach, and the stage term is detached before the grid is ever mounted.
-let panes = null;
-
-// Every attach, detach and mode change runs in order on one chain, so a click during a
-// mode switch cannot interleave with the detach it is waiting on.
-let stage = Promise.resolve();
-const onStage = (fn) => {
-  stage = stage.then(fn).catch((err) => console.error('[athena] stage', err));
-  return stage;
-};
-
-function select(id) {
+/** Bring an instance into view by focusing the tile its group owns. */
+function reveal(id) {
+  const inst = store.getInstance(id);
   store.setSelected(id);
-  return onStage(async () => {
-    if (panes) return; // the grid owns the terminals in split mode
-    if (term.attachedId === id) return;
-    const inst = store.getInstance(id);
-    if (!inst || !inst.alive) return term.detach();
-    await term.attach(id);
-  });
+  if (inst) grid.focusGroup(inst.group);
 }
 
-function setSplit(on) {
-  return onStage(async () => {
-    if (on === Boolean(panes)) return;
-    if (on) {
-      await term.detach(); // hand every id back before the grid claims one
-      panes = mountPanes($('#mount-panes'));
-    } else {
-      const grid = panes;
-      panes = null;
-      await grid.destroy(); // async: it awaits pending attaches before disposing
-      const inst = store.getSelectedInstance();
-      if (inst && inst.alive) await term.attach(inst.id);
-    }
-    const split = Boolean(panes);
-    splitBtn.textContent = split ? 'single' : 'split';
-    splitBtn.setAttribute('aria-pressed', String(split));
-    splitBtn.classList.toggle('primary', split);
-  });
+// ------------------------------------------------------------------ dialogs
+
+/** Wire a header button to a dialog, refreshing its contents each time it opens. */
+function panel(dialogSel, openSel, render) {
+  const dialog = $(dialogSel);
+  dialog.querySelector('[data-close]').onclick = () => dialog.close();
+  $(openSel).onclick = async () => {
+    await render?.();
+    dialog.showModal();
+  };
+  return dialog;
 }
 
-// ------------------------------------------------------------------ panels
-
-mountCards($('#tab-instances'), {
-  onSelect: select,
-  onClosed: (id) => {
-    if (store.getSelected() !== id) return;
-    store.setSelected(null);
-    onStage(() => (panes ? undefined : term.detach()));
+const sessions = mountSessions($('#mount-sessions'), {
+  onResumed: (id) => {
+    $('#panel-sessions').close();
+    reveal(id);
   },
 });
-mountAttention($('#attention'), { onSelect: select });
-mountCounts($('#counts'));
-mountStageBar($('#stage-bar'));
+const codex = mountCodex($('#mount-codex'));
 
-const sessions = mountSessions($('#tab-sessions'), { onResumed: select });
-const codex = mountCodex($('#tab-codex'));
+panel('#panel-sessions', '#open-sessions', () => sessions.render());
+panel('#panel-codex', '#open-codex', () => codex.render());
+panel('#panel-handoff', '#open-handoff');
 
-mountLauncher({ dialog: $('#launcher'), openBtn: $('#new'), onLaunched: select });
-mountAdopt({ dialog: $('#adopter'), openBtn: $('#adopt'), onAdopted: select });
+mountLauncher({ dialog: $('#launcher'), openBtn: $('#new'), onLaunched: reveal });
+mountAdopt({ dialog: $('#adopter'), openBtn: $('#adopt'), onAdopted: reveal });
 
 // ------------------------------------------------------------------ header
+
+mountAttention($('#attention'), { onSelect: reveal });
+mountCounts($('#counts'));
 
 store.subscribePressure((txt) => {
   const line = txt.split('\n').find((l) => l.startsWith('pressure:')) || txt.split('\n')[0] || '';
@@ -96,9 +71,6 @@ store.subscribePressure((txt) => {
 });
 
 $('#resume-all').onclick = () => pbuildResumeAll().then(store.refreshPressure);
-
-const splitBtn = $('#split');
-splitBtn.onclick = () => setSplit(!panes);
 
 // ------------------------------------------------------------------ notifications
 
@@ -112,21 +84,7 @@ store.subscribe(({ changed }) => {
   }
 });
 
-// ------------------------------------------------------------------ tabs
-
-const TABS = ['instances', 'sessions', 'codex'];
-for (const b of document.querySelectorAll('.tabs button')) {
-  b.onclick = () => {
-    document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
-    for (const t of TABS) $(`#tab-${t}`).hidden = t !== b.dataset.tab;
-    if (b.dataset.tab === 'sessions') sessions.render();
-    if (b.dataset.tab === 'codex') codex.render();
-  };
-}
-
 // ------------------------------------------------------------------ feature mounts
-// One import above and one mount call here per shard. Panes is the exception: it owns the
-// stage's ptys, so it is mounted and unmounted by the split toggle rather than at boot.
 
 mountBroadcast($('#mount-broadcast'));
 mountCost($('#mount-cost'));

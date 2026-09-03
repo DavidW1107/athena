@@ -679,3 +679,28 @@ resolves its id from `ATHENA_ID` when present and otherwise from `#{session_name
 `MIME_INSTANCE` and `MIME_PANE` plus `dragPayload(dt)` and `isDroppable(dt)`. Acceptance during
 dragenter/dragover must use `isDroppable`, because `getData` is sealed until drop. A pane swap
 detaches both panes before either re-attaches; see the note on `pty.rs` keying one pty per id.
+
+## v1.3 layout change (supersedes the sidebar and stage sections above)
+
+`src/panes.js` and `src/panes.css` are deleted. `mountCards`, `card` and `mountStageBar` are gone
+from `src/cards.js`, which now exports only `mountAttention`, `mountCounts`, `mountSessions` and
+`mountCodex`.
+
+`src/grid.js` owns every terminal. `mountGrid(host, opts) -> { destroy, focusGroup(group) }`.
+One tile per `InstanceView.group`, one xterm per tile, instances as tabs. An inactive tab holds no
+pty; switching tab is `term.attach(id)` on the tile's existing handle, which detaches the previous
+id first. Tile order is user-draggable and persisted at `localStorage['athena.tileOrder']`.
+
+Mount elements in `index.html`:
+
+| Element | Holds |
+|---|---|
+| `#grid-host` | the tile grid, the only thing in `<main>` |
+| `#counts`, `#pressure`, `#mount-cost`, `#mount-autopause` | header |
+| `#attention`, `#mount-broadcast` | full-width strips under the header |
+| `#mount-sessions`, `#mount-codex`, `#mount-handoff` | inside `dialog.panel`, opened from header buttons |
+
+New tokens in `:root`: `--panel-2` (tile header), `--hover`, `--line-strong`, `--accent`.
+`--needs` remains the only rationed accent. `THEME` in `src/term.js` carries the literal xterm
+palette, which is the one place a hex is allowed because xterm paints to a canvas and cannot read
+a CSS custom property; keep it in step with `--bg` and `--ink`.

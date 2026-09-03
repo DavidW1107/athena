@@ -15,8 +15,9 @@
       <span id="mount-autopause" class="mount"></span>
       <span id="pressure" class="pressure" title="pbuild ls"></span>
       <button id="resume-all" class="ghost" title="pbuild resume-all">resume all</button>
-      <button id="split" class="ghost" aria-pressed="false"
-        title="split the stage into up to four live terminals">split</button>
+      <button id="open-sessions" class="ghost" title="resume a past Claude session">resume</button>
+      <button id="open-codex" class="ghost" title="codex-task runs">codex</button>
+      <button id="open-handoff" class="ghost" title="move context between instances">handoff</button>
       <button id="adopt" class="ghost"
         title="adopt a tmux session or a process Athena did not start">adopt</button>
       <button id="new" class="primary">+ instance</button>
@@ -25,27 +26,27 @@
     <div id="attention" class="attention" hidden></div>
     <div id="mount-broadcast" class="mount"></div>
 
-    <main>
-      <aside>
-        <nav class="tabs">
-          <button data-tab="instances" class="on">Instances</button>
-          <button data-tab="sessions">Resume</button>
-          <button data-tab="codex">Codex</button>
-        </nav>
-        <div id="tab-instances" class="tab"></div>
-        <div id="tab-sessions" class="tab" hidden></div>
-        <div id="tab-codex" class="tab" hidden></div>
-        <div id="mount-handoff" class="mount"></div>
-      </aside>
-
-      <section class="stage">
-        <div id="stage-bar" class="stage-bar"><span class="muted">no instance selected</span></div>
-        <div id="mount-panes" class="mount"></div>
-        <div id="term"></div>
-      </section>
-    </main>
+    <main id="grid-host" class="grid-host"></main>
 
     <dialog id="adopter"></dialog>
+
+    <dialog id="panel-sessions" class="panel">
+      <h2 class="panel-title">Resume a session</h2>
+      <div id="mount-sessions" class="panel-body"></div>
+      <menu class="panel-menu"><button class="ghost" data-close>close</button></menu>
+    </dialog>
+
+    <dialog id="panel-codex" class="panel">
+      <h2 class="panel-title">Codex runs</h2>
+      <div id="mount-codex" class="panel-body"></div>
+      <menu class="panel-menu"><button class="ghost" data-close>close</button></menu>
+    </dialog>
+
+    <dialog id="panel-handoff" class="panel">
+      <h2 class="panel-title">Hand off context</h2>
+      <div id="mount-handoff" class="panel-body"></div>
+      <menu class="panel-menu"><button class="ghost" data-close>close</button></menu>
+    </dialog>
 
     <dialog id="launcher">
       <form method="dialog">

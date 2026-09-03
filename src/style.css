@@ -1,15 +1,27 @@
 :root {
-  --bg: #0a0908;
-  --panel: #131110;
-  --line: rgba(255, 255, 255, 0.08);
-  --ink: #e8e4dd;
-  --dim: #8a847c;
-  --working: #4ea86b;
-  --needs: #e0a03c;
-  --idle: #6b6a66;
-  --dead: #a8564e;
-  --paused: #5b7fa8;
-  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  /* Surfaces. Measured against the terminal this app sits beside: Ptyxis on the VS Code
+     dark palette, which grounds around #1e1e1e rather than near-black. Athena keeps a warm
+     cast so it is not a second VS Code, but it sits at the same brightness. */
+  --bg: #1c1b1a;
+  --panel: #232120;
+  --panel-2: #2b2827;
+  --hover: rgba(255, 255, 255, 0.07);
+  --line: rgba(255, 255, 255, 0.11);
+  --line-strong: rgba(255, 255, 255, 0.22);
+
+  /* Text. --dim is 7:1 on --bg, so secondary text is still AA at small sizes. */
+  --ink: #eae6df;
+  --dim: #a49e95;
+
+  /* State. One rationed accent: --needs is the needs-you signal and nothing else uses it. */
+  --working: #6bbf7b;
+  --needs: #f0b24a;
+  --idle: #8d8880;
+  --dead: #e0645a;
+  --paused: #6f9fd0;
+  --accent: #8ab4d8;
+
+  --mono: "Ubuntu Sans Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -57,8 +69,9 @@ button {
   background: transparent;
   color: var(--ink);
 }
-button.primary { background: rgba(255, 255, 255, 0.1); }
-button:hover { background: rgba(255, 255, 255, 0.14); }
+button.primary { background: var(--hover); border-color: var(--line-strong); }
+button:hover:not(:disabled) { background: var(--hover); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* The strip is emptied rather than hidden when nothing needs you, so :empty is what
    takes it out of the layout. */
@@ -80,15 +93,7 @@ button:hover { background: rgba(255, 255, 255, 0.14); }
    the moment a second block appeared. */
 body { display: flex; flex-direction: column; }
 body > header, body > .attention, body > .mount { flex: none; }
-main { display: flex; flex: 1 1 auto; min-height: 0; }
-aside {
-  width: 330px;
-  flex: none;
-  border-right: 1px solid var(--line);
-  background: var(--panel);
-  display: flex;
-  flex-direction: column;
-}
+main { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .tabs { display: flex; border-bottom: 1px solid var(--line); }
 .tabs button { border: 0; border-radius: 0; flex: 1; padding: 9px 0; color: var(--dim); }
 .tabs button.on { color: var(--ink); box-shadow: inset 0 -2px 0 var(--ink); }
@@ -112,7 +117,7 @@ aside {
   cursor: pointer;
   background: rgba(255, 255, 255, 0.02);
 }
-.card.sel { border-color: rgba(255, 255, 255, 0.34); }
+.card.sel { border-color: var(--line-strong); }
 .banner { height: 3px; background: var(--idle); }
 .card[data-state="working"] .banner { background: var(--working); }
 .card[data-state="needs-you"] .banner { background: var(--needs); animation: pulse 1.4s ease-in-out infinite; }
@@ -130,23 +135,11 @@ aside {
 .card-actions button { padding: 2px 7px; font-size: 10px; }
 
 .row { padding: 7px 8px; border-bottom: 1px solid var(--line); cursor: pointer; }
-.row:hover { background: rgba(255, 255, 255, 0.04); }
+.row:hover { background: var(--hover); }
 .row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-sub { font-family: var(--mono); font-size: 10px; color: var(--dim); }
 
-.stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.stage-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 34px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--line);
-  font-family: var(--mono);
-  font-size: 11px;
-}
 .muted { color: var(--dim); }
-#term { flex: 1; min-height: 0; padding: 6px 0 0 8px; }
 
 dialog {
   border: 1px solid var(--line);
@@ -174,8 +167,6 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
 /* Feature mount points. Each stays out of the layout until its shard fills it;
    a shard styles its own subtree from its own CSS file and never edits this one. */
 .mount:empty { display: none; }
-#mount-panes:not(:empty) { flex: 1; min-height: 0; display: flex; }
-#mount-panes:not(:empty) ~ #term { display: none; }
 #mount-broadcast:not(:empty) { border-bottom: 1px solid var(--line); }
 #mount-handoff:not(:empty) { border-top: 1px solid var(--line); }
 
@@ -186,4 +177,33 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
 
 @media (prefers-reduced-motion: reduce) {
   .card.dragging { opacity: 1; }
+}
+
+/* Dialog panels: the Resume browser, the Codex lane and handoff, which used to live in a
+   permanent sidebar and now cost nothing until opened. */
+.panel {
+  width: min(760px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.panel-title {
+  margin: 0 0 12px;
+  font: 600 14px/1.2 system-ui, sans-serif;
+}
+
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.panel-menu {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0;
+  padding: 0;
 }

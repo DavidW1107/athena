@@ -87,3 +87,33 @@ holds would give both panes the same pty.
 
 Dragging a real terminal *window* into Athena is not possible: reparenting a foreign window was an
 X11 trick and Wayland removed it. Adoption is the substitute.
+
+## v1.3: one screen, brighter, launchable from the desktop
+
+**Every instance at once.** The sidebar and the single stage terminal are gone. The window is a
+grid of tiles, one per repo group, and a group's instances are tabs inside its tile. Seven
+instances across three repos is three tiles, not seven, so a busy repo never eats the screen.
+
+A tile owns exactly one terminal. Switching tab re-points that terminal, so an inactive tab holds
+no pty at all and tmux keeps its screen for the redraw. That is what makes an unbounded number of
+instances affordable: cost scales with groups, not instances. Tiles never shrink below a readable
+terminal; the grid scrolls instead. Drag a tile's header onto another tile to reorder, and the
+order is remembered.
+
+**Header, not sidebar.** Launch, adopt, the needs-you queue and the counts live in the top bar.
+Resume, Codex and handoff became dialogs opened from there, so they cost screen only while open.
+
+**Brighter.** The palette is measured against Ptyxis on its VS Code profile, which is the terminal
+this app sits beside: surfaces move from near-black `#0a0908` to `#1c1b1a` and `#232120`, secondary
+text is `#a49e95` (7:1 on the ground), and the terminal itself now renders the VS Code ANSI set in
+Ubuntu Sans Mono, so a Claude Code TUI looks the same here as it does next door. Amber stays
+rationed as the needs-you signal alone.
+
+**Desktop launcher.**
+
+    npm run tauri build -- --no-bundle
+    ./scripts/install-desktop.sh
+
+That copies the binary to `~/.local/bin/athena`, installs the icon, and writes
+`~/.local/share/applications/athena.desktop`. Nothing needs root. Athena is then searchable by
+name from the desktop and pinnable to the dock. Re-run the script after each release build.
