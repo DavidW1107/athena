@@ -1,33 +1,36 @@
 :root {
-  /* Surfaces sit ABOVE the terminal beside them: Ptyxis on the VS Code palette grounds near
-     #1e1e1e, so Athena at #26221f reads as lit rather than as another black window. Warm cast
-     throughout so it is not a second VS Code. */
-  --bg: #26221f;
-  --panel: #2f2b27;
-  --panel-2: #3a3531;
-  --hover: rgba(255, 255, 255, 0.09);
-  --line: rgba(255, 255, 255, 0.14);
-  --line-strong: rgba(255, 255, 255, 0.30);
+  /* This is the user's own terminal theme, not an invention: Ptyxis on its "VS Code" profile,
+     extracted from the palette Ptyxis ships (gresource: /org/gnome/Ptyxis/palettes/Vs Code.palette,
+     [Dark] Background=#1E1E1E Foreground=#CCCCCC). Athena grounds on the same #1E1E1E and takes
+     the VS Code Dark+ UI surfaces above it, so the app and the terminal beside it are one theme.
 
-  /* Text. --dim holds 7:1 on --bg, so secondary text is AA at small sizes. */
-  --ink: #f5f1ea;
-  --dim: #b8b1a6;
+     Earlier attempts were a warm brown-grey with muted pastels. That reads muddy, and a muddy
+     surface reads HEAVY, which is why "too dark" and "washed out" were the same complaint. The
+     fix is a neutral ground plus real chroma, not a lighter grey. */
+  --bg: #1e1e1e;
+  --panel: #252526;
+  --panel-2: #2d2d30;
+  --hover: rgba(255, 255, 255, 0.08);
+  --line: #3a3a3c;
+  --line-strong: #565659;
 
-  /* State. Saturated on purpose: these are read at a glance across a full screen of tiles,
-     from a 7px dot, so chroma is doing the work rather than a label. --needs stays the one
-     rationed accent and marks nothing except an instance waiting on you. */
-  --working: #35d07f;
-  --needs: #ffb224;
-  /* Washes of the accent, spelled out rather than derived. A mixed colour would keep one
-     source of truth, but the CSS minifier drops a literal fallback beside it as a duplicate
-     declaration, so an engine lacking that function would silently lose the tint. These two
-     move with --needs by hand; there are only two of them. */
-  --needs-wash: rgba(255, 178, 36, 0.14);
-  --needs-edge: rgba(255, 178, 36, 0.38);
-  --idle: #9b948a;
-  --dead: #ff5d55;
-  --paused: #4da3ff;
-  --accent: #5ab0ff;
+  /* Text lifted above the terminal's own #CCCCCC, so chrome reads in front of the output. */
+  --ink: #f2f2f2;
+  --dim: #a6a6a6;
+
+  /* States ARE his ANSI colours, so a green in a tile means what a green means in his shell.
+     Every one clears AA on #1e1e1e: working 12.5:1, needs 6.9:1, dead 5.1:1, paused 5.6:1. */
+  --working: #00ff9a;
+  --needs: #e89440;
+  /* Washes of the accent, spelled out rather than derived: the CSS minifier drops a literal
+     fallback beside a mixed colour as a duplicate, so a derived tint can vanish silently.
+     These two move with --needs by hand. */
+  --needs-wash: rgba(232, 148, 64, 0.14);
+  --needs-edge: rgba(232, 148, 64, 0.40);
+  --idle: #8b9b9d;
+  --dead: #e9653b;
+  --paused: #009afb;
+  --accent: #009afb;
 
   --mono: "Ubuntu Sans Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
@@ -123,7 +126,7 @@ main { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
   margin-bottom: 7px;
   overflow: hidden;
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--panel);
 }
 .card.sel { border-color: var(--line-strong); }
 .banner { height: 3px; background: var(--idle); }
@@ -166,7 +169,7 @@ dialog input, dialog select {
   padding: 7px 8px;
   font: 13px var(--mono);
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 5px;
 }

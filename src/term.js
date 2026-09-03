@@ -10,30 +10,32 @@ import { onPty, ptyAttach, ptyDetach, ptyResize, ptyWrite } from './api.js';
 
 // Kept in step with the tokens in style.css. xterm needs literal colours (it paints to a
 // canvas and cannot read a CSS custom property), so this is the one place a hex is allowed.
-// The ANSI set starts from the VS Code dark palette his terminal runs, pushed brighter and
-// more saturated to sit on this lighter ground without going muddy.
+// These sixteen values are copied verbatim from the palette the user's own terminal runs:
+// Ptyxis, "VS Code" profile, [Dark] section. Do not "improve" them; the point is that output
+// looks identical in Athena and in the terminal next to it. xterm paints to a canvas and
+// cannot read a CSS custom property, which is why the literals live here.
 const THEME = {
-  background: '#26221f',
-  foreground: '#f5f1ea',
-  cursor: '#ffb224',
-  cursorAccent: '#26221f',
-  selectionBackground: 'rgba(90, 176, 255, 0.32)',
-  black: '#26221f',
-  red: '#ff5d55',
-  green: '#35d07f',
-  yellow: '#ffd53d',
-  blue: '#4da3ff',
-  magenta: '#e478e4',
-  cyan: '#2fd0f0',
-  white: '#e5e5e5',
-  brightBlack: '#9b948a',
-  brightRed: '#ff7b73',
-  brightGreen: '#5ce49b',
-  brightYellow: '#ffe66b',
-  brightBlue: '#7cbcff',
-  brightMagenta: '#f29bf2',
-  brightCyan: '#6ee0f7',
-  brightWhite: '#ffffff',
+  background: '#1e1e1e',
+  foreground: '#cccccc',
+  cursor: '#cccccc',
+  cursorAccent: '#1e1e1e',
+  selectionBackground: 'rgba(0, 154, 251, 0.32)',
+  black: '#6a787a',
+  red: '#e9653b',
+  green: '#39e9a8',
+  yellow: '#e5b684',
+  blue: '#44aae6',
+  magenta: '#e17599',
+  cyan: '#3dd5e7',
+  white: '#c3dde1',
+  brightBlack: '#598489',
+  brightRed: '#e65029',
+  brightGreen: '#00ff9a',
+  brightYellow: '#e89440',
+  brightBlue: '#009afb',
+  brightMagenta: '#ff578f',
+  brightCyan: '#5fffff',
+  brightWhite: '#d9fbff',
 };
 
 /**

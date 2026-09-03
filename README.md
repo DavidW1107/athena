@@ -103,11 +103,19 @@ order is remembered.
 **Header, not sidebar.** Launch, adopt, the needs-you queue and the counts live in the top bar.
 Resume, Codex and handoff became dialogs opened from there, so they cost screen only while open.
 
-**Brighter.** The palette is measured against Ptyxis on its VS Code profile, which is the terminal
-this app sits beside: surfaces move from near-black `#0a0908` to `#1c1b1a` and `#232120`, secondary
-text is `#a49e95` (7:1 on the ground), and the terminal itself now renders the VS Code ANSI set in
-Ubuntu Sans Mono, so a Claude Code TUI looks the same here as it does next door. Amber stays
-rationed as the needs-you signal alone.
+**Theme.** Athena runs the user's own terminal theme rather than an approximation of it: Ptyxis on
+its "VS Code" profile, extracted from the palette Ptyxis ships in its gresource
+(`/org/gnome/Ptyxis/palettes/Vs Code.palette`, `[Dark] Background=#1E1E1E Foreground=#CCCCCC`).
+The app grounds on the same `#1E1E1E` with the VS Code Dark+ UI surfaces above it, the sixteen
+ANSI colours in `src/term.js` are copied verbatim from that file, and the state colours are drawn
+from the same set, so a green in a tile means what a green means in the shell next door.
+
+Two earlier attempts used a warm brown-grey with muted pastels. That reads muddy, and a muddy
+surface reads heavy, which is why "too dark" and "washed out" turned out to be one complaint: the
+fix was a neutral ground with real chroma, not a lighter grey. Chrome text is lifted to `#f2f2f2`,
+above the terminal's own `#CCCCCC`, so it reads in front of the output. Every state colour clears
+WCAG AA on `#1E1E1E`. That palette file also carries a `[Light]` section
+(`Background=#F9F9F9`), so a light variant is a `:root` swap away if it is ever wanted.
 
 **Desktop launcher.**
 
