@@ -1,13 +1,14 @@
-// Argus: manager for Claude Code / Codex terminal instances.
+// Athena: manager for Claude Code / Codex terminal instances.
 //
 // Design in one line: tmux owns session lifetime, a JSON registry owns intent,
-// Claude Code hooks own state. Argus just renders and orchestrates those three.
+// Claude Code hooks own state. Athena just renders and orchestrates those three.
 //
 // CONVERGENCE POINT. This file holds module declarations and the Tauri builder and
 // nothing else. A feature shard adds its own `mod` line and its commands to the
 // invoke_handler list at integration time; it never edits anything else here.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod adopt;
 mod autopause;
 mod broadcast;
 mod cost;
@@ -22,7 +23,7 @@ mod util;
 use pty::PtyStore;
 
 fn main() {
-    util::argus_dir();
+    util::athena_dir();
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(PtyStore::default())
@@ -35,6 +36,11 @@ fn main() {
             registry::send_text,
             registry::send_key,
             registry::list_repos,
+            adopt::list_adoptable_sessions,
+            adopt::adopt_session,
+            adopt::list_adoptable_processes,
+            adopt::reptyr_check,
+            adopt::adopt_process,
             sessions::past_sessions,
             sessions::resume_session,
             lanes::codex_tasks,
@@ -54,5 +60,5 @@ fn main() {
             pty::pty_detach
         ])
         .run(tauri::generate_context!())
-        .expect("argus failed to start");
+        .expect("athena failed to start");
 }

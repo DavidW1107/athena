@@ -1,0 +1,85 @@
+/* Adopt dialog. Tool chrome: the same tokens as every other panel, no new colours. */
+
+#adopter {
+  min-width: 560px;
+  max-width: 720px;
+  max-height: 76vh;
+  overflow-y: auto;
+}
+
+.adopt-title {
+  margin: 0 0 14px;
+  font: 600 14px/1.2 system-ui, sans-serif;
+}
+
+.adopt-section { margin-bottom: 20px; }
+
+.adopt-heading {
+  margin: 0 0 4px;
+  font: 10px/1.4 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.adopt-note,
+.adopt-empty {
+  margin: 0 0 10px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.adopt-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.adopt-text { min-width: 0; flex: 1; }
+
+.adopt-row-title {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.adopt-row-sub {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adopt-blocked {
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--needs);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.adopt-blocked-why {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.adopt-fix {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.05);
+  font: 11px/1.5 var(--mono);
+  user-select: text;
+}
+
+.adopt-menu {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}

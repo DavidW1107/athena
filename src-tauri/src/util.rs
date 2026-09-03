@@ -1,4 +1,4 @@
-// Paths, clock, and /proc parsing. No Argus concepts live here, so every other
+// Paths, clock, and /proc parsing. No Athena concepts live here, so every other
 // module may depend on this one and nothing depends back.
 
 use std::fs;
@@ -9,8 +9,8 @@ pub fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
 }
 
-pub fn argus_dir() -> PathBuf {
-    let d = home().join(".argus");
+pub fn athena_dir() -> PathBuf {
+    let d = home().join(".athena");
     let _ = fs::create_dir_all(d.join("state"));
     d
 }

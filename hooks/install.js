@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// Adds the Argus state hook to ~/.claude/settings.json for every event Argus reads.
-// Backs the file up first, is idempotent, and `--uninstall` removes only Argus entries.
+// Adds the Athena state hook to ~/.claude/settings.json for every event Athena reads.
+// Backs the file up first, is idempotent, and `--uninstall` removes only Athena entries.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const settings = path.join(process.env.HOME, '.claude', 'settings.json');
-const hook = path.join(here, 'argus-state.js');
+const hook = path.join(here, 'athena-state.js');
 const node = process.execPath;
 const cmd = `${node} "${hook}"`;
 const EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Notification', 'Stop', 'SessionEnd'];
@@ -23,7 +23,7 @@ if (fs.existsSync(settings)) {
     console.error(`${settings} is not valid JSON; refusing to rewrite it. ${err.message}`);
     process.exit(1);
   }
-  backup = `${settings}.argus-backup-${Date.now()}`;
+  backup = `${settings}.athena-backup-${Date.now()}`;
   fs.copyFileSync(settings, backup);
 } else if (uninstall) {
   console.log(`No ${settings}; nothing to remove.`);
@@ -32,17 +32,17 @@ if (fs.existsSync(settings)) {
   fs.mkdirSync(path.dirname(settings), { recursive: true });
 }
 
-const isArgus = (h) => String(h?.command || '').includes('argus-state.js');
+const isAthena = (h) => String(h?.command || '').includes('athena-state.js');
 
 cfg.hooks = cfg.hooks || {};
 for (const ev of EVENTS) {
-  // Drop only the Argus command out of each group, never the group. A group can hold another
+  // Drop only the Athena command out of each group, never the group. A group can hold another
   // tool's hook, and taking the whole group would silently uninstall that tool as well.
   const groups = [];
   for (const g of cfg.hooks[ev] || []) {
-    const kept = (g.hooks || []).filter((h) => !isArgus(h));
+    const kept = (g.hooks || []).filter((h) => !isAthena(h));
     if (kept.length) groups.push({ ...g, hooks: kept });
-    else if (!(g.hooks || []).some(isArgus)) groups.push(g); // an empty group we did not empty
+    else if (!(g.hooks || []).some(isAthena)) groups.push(g); // an empty group we did not empty
   }
   if (!uninstall) {
     groups.push({ hooks: [{ type: 'command', command: cmd, timeout: 5 }] });
@@ -52,5 +52,5 @@ for (const ev of EVENTS) {
 }
 
 fs.writeFileSync(settings, JSON.stringify(cfg, null, 2));
-console.log(`${uninstall ? 'Removed' : 'Installed'} Argus hooks in ${settings}`);
+console.log(`${uninstall ? 'Removed' : 'Installed'} Athena hooks in ${settings}`);
 if (backup) console.log(`Backup: ${backup}`);

@@ -1,4 +1,4 @@
-# Argus
+# Athena
 
 A manager for Claude Code and Codex terminal instances. One window, grouped by repo,
 with a colour banner per instance state and a queue of the ones blocked on you.
@@ -8,14 +8,14 @@ with a colour banner per instance state and a queue of the ones blocked on you.
 Three moving parts, each owned by something that already exists:
 
 - **tmux owns session lifetime.** Every instance is a detached tmux session named
-  `argus_<id>`. Close Argus, kill Argus, log out: the sessions keep running and reattach
+  `athena_<id>`. Close Athena, kill Athena, log out: the sessions keep running and reattach
   on next launch.
-- **`~/.argus/instances.json` owns intent.** Directory, command, group, and the Claude
+- **`~/.athena/instances.json` owns intent.** Directory, command, group, and the Claude
   session id for each instance. Survives a reboot, so after a crash a dead instance shows
   a **restore** button that runs `claude --resume <session-id>` in a fresh tmux session.
-- **Claude Code hooks own state.** `hooks/argus-state.js` is wired to `SessionStart`,
+- **Claude Code hooks own state.** `hooks/athena-state.js` is wired to `SessionStart`,
   `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Notification`, `Stop` and `SessionEnd`,
-  and writes one small JSON file per instance to `~/.argus/state/`. No output scraping.
+  and writes one small JSON file per instance to `~/.athena/state/`. No output scraping.
 
 States: `working` (green) · `needs-you` (amber, pulsing) · `idle` (grey) · `paused` (blue) ·
 `dead` / `ended` (red).
@@ -28,13 +28,13 @@ States: `working` (green) · `needs-you` (amber, pulsing) · `idle` (grey) · `p
     node hooks/install.js      # adds the state hook to ~/.claude/settings.json (backs it up first)
     npm run tauri dev
 
-`node hooks/install.js --uninstall` removes just the Argus hook entries.
+`node hooks/install.js --uninstall` removes just the Athena hook entries.
 
 ## Panels
 
 - **Instances**: grouped by git repo. Click a card to attach its terminal. Pause sends
   `SIGSTOP` to the pane's foreground process group; resume sends `SIGCONT`.
-- **Resume**: past Claude sessions for any directory Argus knows about, titled by their
+- **Resume**: past Claude sessions for any directory Athena knows about, titled by their
   first real user message, one click to `claude --resume`.
 - **Codex**: the `codex-task` runs in `~/.codex/tasks`, live status from their `status` file.
 
@@ -59,3 +59,31 @@ The header shows the `pbuild ls` pressure line and a **resume all** button.
   memory pressure over a PSI threshold, an instance waiting on another pbuild shard, and a
   session blocked on you for too long. Nothing mid-turn is ever stopped, because a stopped
   process cannot service its own sockets and the live API call would time out.
+
+## v1.2: adoption and drag
+
+**Adopt a tmux session.** The `adopt` button lists every tmux session Athena did not create.
+Adopting one renames it to `athena_<id>`, which is how it joins the fleet without a session-name
+field threaded through every module. Renaming does not detach existing clients, so a terminal you
+already have open on that session keeps working and Athena just becomes a second client.
+
+An adopted agent was already running when Athena arrived, so its environment can never contain
+`ATHENA_ID`. `hooks/athena-state.js` therefore falls back to asking tmux which session its pane is
+in and taking the id from the session name. That is why an adopted instance reports state exactly
+like a launched one.
+
+**Adopt a bare process.** An agent running outside tmux can only be moved with `reptyr`, which
+ptrace-attaches to the live process and relocates it onto a new pty. It needs
+`kernel.yama.ptrace_scope` at 0, or `cap_sys_ptrace` granted to the reptyr binary alone, which is
+the narrower of the two. **Athena never changes that setting for you.** `reptyr_check` reports what
+is blocking and prints the exact command; you run it. The move can also kill the process it is
+moving, so finish the turn first.
+
+**Drag and drop.** Drag a sidebar card onto a pane in split mode to attach it there. Drag a pane's
+header onto another pane to swap them. Dropping an instance that another pane already holds is a
+swap rather than a steal, so no pane silently goes blank. Both panes are detached before either
+re-attaches, because `pty.rs` keys one pty per instance id and attaching an id another pane still
+holds would give both panes the same pty.
+
+Dragging a real terminal *window* into Athena is not possible: reparenting a foreign window was an
+X11 trick and Wayland removed it. Adoption is the substitute.

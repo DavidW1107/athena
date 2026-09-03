@@ -80,7 +80,7 @@ export function subscribe(fn) {
   try {
     fn(snapshot());
   } catch (err) {
-    console.error('[argus] subscriber threw on first call', err);
+    console.error('[athena] subscriber threw on first call', err);
   }
   return () => unsubscribe(fn);
 }
@@ -96,7 +96,7 @@ export function subscribePressure(fn) {
   try {
     fn(pressure);
   } catch (err) {
-    console.error('[argus] pressure subscriber threw on first call', err);
+    console.error('[athena] pressure subscriber threw on first call', err);
   }
   return () => pressureSubs.delete(fn);
 }
@@ -112,7 +112,7 @@ function emit(changed) {
     try {
       fn(snap);
     } catch (err) {
-      console.error('[argus] subscriber threw', err);
+      console.error('[athena] subscriber threw', err);
     }
   }
 }
@@ -147,7 +147,7 @@ export async function refreshPressure() {
     try {
       fn(pressure);
     } catch (err) {
-      console.error('[argus] pressure subscriber threw', err);
+      console.error('[athena] pressure subscriber threw', err);
     }
   }
   return pressure;

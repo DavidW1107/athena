@@ -14,6 +14,7 @@
 import './panes.css';
 import { stateColor, stateLabel } from './api.js';
 import * as store from './store.js';
+import { MIME_PANE, dragPayload, isDroppable } from './dnd.js';
 import { createTerm } from './term.js';
 
 const LAYOUTS = [1, 2, 4];
@@ -118,9 +119,59 @@ export function mountPanes(host, opts = {}) {
     });
     node.addEventListener('focusin', () => markActive(index));
 
+    // Drag source: the pane header carries this pane's slot index, so dropping it on
+    // another pane swaps the two. Only a filled pane is draggable (renderHead sets it).
+    head.addEventListener('dragstart', (e) => {
+      if (!slots[index]) {
+        e.preventDefault();
+        return;
+      }
+      e.dataTransfer.setData(MIME_PANE, String(index));
+      e.dataTransfer.effectAllowed = 'move';
+      node.classList.add('dragging');
+    });
+    head.addEventListener('dragend', () => {
+      node.classList.remove('dragging');
+      for (const n of grid.querySelectorAll('.panes-pane.over')) n.classList.remove('over');
+    });
+
+    // Drop target. dragenter and dragleave also fire for descendants, so the highlight is
+    // reference counted rather than toggled, otherwise crossing a child clears it early.
+    let overDepth = 0;
+    node.addEventListener('dragenter', (e) => {
+      if (!isDroppable(e.dataTransfer)) return;
+      e.preventDefault();
+      overDepth += 1;
+      node.classList.add('over');
+    });
+    node.addEventListener('dragover', (e) => {
+      if (!isDroppable(e.dataTransfer)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    });
+    node.addEventListener('dragleave', () => {
+      overDepth = Math.max(0, overDepth - 1);
+      if (overDepth === 0) node.classList.remove('over');
+    });
+    node.addEventListener('drop', (e) => {
+      overDepth = 0;
+      node.classList.remove('over');
+      const payload = dragPayload(e.dataTransfer);
+      if (!payload) return;
+      e.preventDefault();
+      markActive(index);
+      if (payload.kind === 'pane') {
+        const from = Number(payload.value);
+        if (Number.isInteger(from) && from >= 0 && from < MAX) swapSlots(index, from);
+      } else if (payload.value) {
+        place(index, payload.value);
+      }
+    });
+
     grid.appendChild(node);
     return {
       root: node,
+      head,
       dot,
       name,
       state,
@@ -143,6 +194,7 @@ export function mountPanes(host, opts = {}) {
     const id = slots[index];
     const inst = id ? store.getInstance(id) : null;
     pane.closeBtn.hidden = !id;
+    pane.head.draggable = !!id;
     pane.dot.dataset.state = inst ? inst.state : 'empty';
     pane.dot.style.background = inst ? stateColor(inst.state) : 'var(--idle)';
     pane.name.textContent = inst ? `${inst.group}/${inst.name}` : id || 'empty pane';
@@ -254,12 +306,12 @@ export function mountPanes(host, opts = {}) {
       }
       // Free the id again so the pane is retryable and no other pane is blocked.
       slots[index] = null;
-      setError(index, `argus: ${msg}`);
+      setError(index, `athena: ${msg}`);
       renderHead(index);
       renderBody(index);
       refreshPickers();
     });
-    pane.chain = pane.chain.catch((err) => console.error('[argus] pane slot', err));
+    pane.chain = pane.chain.catch((err) => console.error('[athena] pane slot', err));
     return pane.chain;
   }
 
@@ -269,6 +321,36 @@ export function mountPanes(host, opts = {}) {
       refreshPickers();
       return Promise.resolve();
     }
+    const inst = store.getInstance(id);
+    if (!inst || !inst.alive) {
+      refreshPickers();
+      return Promise.resolve();
+    }
+    return setSlot(index, id);
+  }
+
+  /**
+   * Swap what two panes hold.
+   *
+   * Both panes are detached BEFORE either attaches. pty.rs keys one pty per instance id and
+   * `attach` on an already-attached id is a successful no-op, so letting pane A attach an id
+   * pane B still holds would give both panes the same pty, and B's detach would then kill it
+   * underneath A. Clearing first makes the exchange safe at the cost of a brief blank pane.
+   */
+  async function swapSlots(a, b) {
+    if (a === b) return;
+    const ia = slots[a];
+    const ib = slots[b];
+    await Promise.all([setSlot(a, null), setSlot(b, null)]);
+    await Promise.all([setSlot(a, ib), setSlot(b, ia)]);
+  }
+
+  /** Drop an instance onto a pane. Dragging one that another pane holds moves it, which is
+   *  a swap rather than a steal, so the other pane never silently goes blank. */
+  function place(index, id) {
+    const from = slots.indexOf(id);
+    if (from === index) return Promise.resolve();
+    if (from >= 0) return swapSlots(index, from);
     const inst = store.getInstance(id);
     if (!inst || !inst.alive) {
       refreshPickers();
@@ -333,7 +415,7 @@ export function mountPanes(host, opts = {}) {
       }
       const inst = instances.find((x) => x.id === id);
       if (!inst || !inst.alive) {
-        setError(i, inst ? `argus: ${inst.name} is not running` : 'argus: instance closed');
+        setError(i, inst ? `athena: ${inst.name} is not running` : 'athena: instance closed');
         setSlot(i, null);
         continue;
       }

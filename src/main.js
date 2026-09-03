@@ -9,6 +9,7 @@ import * as store from './store.js';
 import { createTerm } from './term.js';
 import { mountAttention, mountCards, mountCodex, mountCounts, mountSessions, mountStageBar } from './cards.js';
 import { mountLauncher } from './launcher.js';
+import { mountAdopt } from './adopt.js';
 import { mountAutopause } from './autopause.js';
 import { mountBroadcast } from './broadcast.js';
 import { mountCost } from './cost.js';
@@ -32,7 +33,7 @@ let panes = null;
 // mode switch cannot interleave with the detach it is waiting on.
 let stage = Promise.resolve();
 const onStage = (fn) => {
-  stage = stage.then(fn).catch((err) => console.error('[argus] stage', err));
+  stage = stage.then(fn).catch((err) => console.error('[athena] stage', err));
   return stage;
 };
 
@@ -85,6 +86,7 @@ const sessions = mountSessions($('#tab-sessions'), { onResumed: select });
 const codex = mountCodex($('#tab-codex'));
 
 mountLauncher({ dialog: $('#launcher'), openBtn: $('#new'), onLaunched: select });
+mountAdopt({ dialog: $('#adopter'), openBtn: $('#adopt'), onAdopted: select });
 
 // ------------------------------------------------------------------ header
 
@@ -141,7 +143,7 @@ mountAutopause($('#mount-autopause'));
     notifyOk = (await isPermissionGranted()) || (await requestPermission()) === 'granted';
   } catch (err) {
     notifyOk = false;
-    console.error('[argus] notifications unavailable', err);
+    console.error('[athena] notifications unavailable', err);
   }
   await store.start();
 })();

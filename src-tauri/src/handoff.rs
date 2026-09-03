@@ -92,7 +92,7 @@ fn strip_injections(text: &str) -> String {
     s.trim().to_string()
 }
 
-/// A record Argus should never hand to another agent, decided from transcript metadata
+/// A record Athena should never hand to another agent, decided from transcript metadata
 /// rather than from the message text: hook/caveat injections (`isMeta`), sub-agent
 /// conversations (`isSidechain`), and the user-shaped records that only carry a tool
 /// result (`toolUseResult`).

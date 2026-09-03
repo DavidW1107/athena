@@ -19,7 +19,7 @@
 //
 // Ownership (which instance this module stopped, and which rules are holding it) is persisted
 // next to the config, the moment the stop succeeds, with the pane pid, that pid's kernel start
-// time, and the foreground pgid that was actually frozen. A pause therefore survives an Argus
+// time, and the foreground pgid that was actually frozen. A pause therefore survives an Athena
 // restart; a recycled instance id cannot make a later resume signal land on a different job;
 // and neither can a pane that has since started a different foreground job, because the pgid is
 // compared before any SIGCONT is sent.
@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use crate::lanes::pbuild_status;
 use crate::registry::{read_reg, read_state, set_paused, Instance};
 use crate::tmux::{fg_pgid, is_stopped_pid, pane_map, sess_name};
-use crate::util::{argus_dir, home, now, proc_stat_fields};
+use crate::util::{athena_dir, home, now, proc_stat_fields};
 
 const MEMORY: &str = "memory";
 const WAITING: &str = "waiting";
@@ -105,7 +105,7 @@ impl Rules {
 }
 
 fn cfg_path() -> PathBuf {
-    argus_dir().join("autopause.json")
+    athena_dir().join("autopause.json")
 }
 
 pub fn read_rules() -> Rules {
@@ -138,7 +138,7 @@ struct Owned {
 type OwnedMap = BTreeMap<String, Owned>;
 
 fn owned_path() -> PathBuf {
-    argus_dir().join("autopause-owned.json")
+    athena_dir().join("autopause-owned.json")
 }
 
 fn read_owned() -> OwnedMap {

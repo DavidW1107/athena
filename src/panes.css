@@ -236,3 +236,19 @@
     opacity: 1;
   }
 }
+
+/* Drag and drop between panes and from the sidebar. Feedback only, no layout shift:
+   a pane that moves while you are dragging onto it is a pane you cannot aim at. */
+.panes-pane.dragging { opacity: 0.45; }
+
+.panes-pane.over {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.panes-head[draggable='true'] { cursor: grab; }
+.panes-pane.dragging .panes-head { cursor: grabbing; }
+
+@media (prefers-reduced-motion: reduce) {
+  .panes-pane.dragging { opacity: 1; }
+}

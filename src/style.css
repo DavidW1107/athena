@@ -178,3 +178,12 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
 #mount-panes:not(:empty) ~ #term { display: none; }
 #mount-broadcast:not(:empty) { border-bottom: 1px solid var(--line); }
 #mount-handoff:not(:empty) { border-top: 1px solid var(--line); }
+
+/* A card being dragged to a pane. Cursor only on the card itself: the grab affordance
+   must not read as though the whole sidebar is draggable. */
+.card[draggable='true'] { cursor: grab; }
+.card.dragging { opacity: 0.45; cursor: grabbing; }
+
+@media (prefers-reduced-motion: reduce) {
+  .card.dragging { opacity: 1; }
+}

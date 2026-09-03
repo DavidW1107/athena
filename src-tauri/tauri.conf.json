@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Argus",
+  "productName": "Athena",
   "version": "0.1.0",
-  "identifier": "ie.mtmn.argus",
+  "identifier": "ie.mtmn.athena",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [
-      { "title": "Argus", "width": 1500, "height": 950, "decorations": true }
+      { "title": "Athena", "width": 1500, "height": 950, "decorations": true }
     ],
     "security": { "csp": null }
   },

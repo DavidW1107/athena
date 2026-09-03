@@ -65,6 +65,23 @@ export const sendKey = (id, key) => invoke('send_key', { id, key });
 /** Repo paths one and two levels under ~/Documents/GitHub, sorted. */
 export const listRepos = () => invoke('list_repos');
 
+// ------------------------------------------------------------------ adoption
+
+/** tmux sessions Athena did not create, offered for adoption by rename. */
+export const listAdoptableSessions = () => invoke('list_adoptable_sessions');
+
+/** Rename an existing tmux session into the fleet. Clients stay attached. */
+export const adoptSession = (session, name) => invoke('adopt_session', { session, name });
+
+/** Agent processes of this user running outside tmux, movable only with reptyr. */
+export const listAdoptableProcesses = () => invoke('list_adoptable_processes');
+
+/** Whether a process adoption can run at all, and the exact command that unblocks it. */
+export const reptyrCheck = () => invoke('reptyr_check');
+
+/** Move a live process onto a new pty inside a fresh Athena session. */
+export const adoptProcess = (pid, name) => invoke('adopt_process', { pid, name });
+
 // ------------------------------------------------------------------ resume browser
 
 /** Past Claude sessions recorded for that cwd, newest first, capped at 40. */

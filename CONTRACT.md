@@ -1,4 +1,4 @@
-# Argus v1.1 foundation contract
+# Athena v1.1 foundation contract
 
 Frozen interface for the v1.1 parallel build. Everything below already exists on disk and
 compiles (`npm run build` and `cargo check` both pass). A feature shard writes only the files
@@ -78,7 +78,7 @@ Six foundation modules. Every item listed is `pub`.
 
 ```rust
 pub fn home() -> PathBuf;                              // $HOME, empty PathBuf if unset
-pub fn argus_dir() -> PathBuf;                         // ~/.argus, creates ~/.argus/state
+pub fn athena_dir() -> PathBuf;                         // ~/.athena, creates ~/.athena/state
 pub fn now() -> u64;                                   // unix seconds
 pub fn proc_stat_fields(pid: i32) -> Option<Vec<String>>;
 ```
@@ -90,7 +90,7 @@ field, so index 0 is the process state letter and index 5 is `tpgid`.
 
 ```rust
 pub fn tmux(args: &[&str]) -> Option<std::process::Output>;
-pub fn sess_name(id: &str) -> String;                  // "argus_<id>"
+pub fn sess_name(id: &str) -> String;                  // "athena_<id>"
 pub fn tmux_alive(sess: &str) -> bool;
 pub fn pane_pid(sess: &str) -> Option<i32>;            // first pane's pid
 pub fn fg_pgid(sess: &str) -> Option<i32>;             // foreground pgid of the pane tty
@@ -147,10 +147,10 @@ pub struct InstanceView {                              // Serialize + Clone + De
     pub idle_secs: u64,
 }
 
-pub fn reg_path() -> PathBuf;                          // ~/.argus/instances.json
+pub fn reg_path() -> PathBuf;                          // ~/.athena/instances.json
 pub fn read_reg() -> Vec<Instance>;
 pub fn write_reg(v: &[Instance]);
-pub fn read_state(id: &str) -> HookState;              // ~/.argus/state/<id>.json
+pub fn read_state(id: &str) -> HookState;              // ~/.athena/state/<id>.json
 
 #[tauri::command] pub fn list_instances() -> Vec<InstanceView>;
 #[tauri::command] pub fn launch(cwd: String, cmd: String, name: String) -> Result<InstanceView, String>;
@@ -222,7 +222,7 @@ pub struct PtyStore(pub Mutex<HashMap<String, PtyHandle>>);   // Default; regist
 #[tauri::command] pub fn pty_detach(ptys: State<PtyStore>, id: String) -> Result<(), String>;
 ```
 
-One pty per instance id, each running `tmux attach -t argus_<id>`. Output is emitted to the
+One pty per instance id, each running `tmux attach -t athena_<id>`. Output is emitted to the
 webview as event `pty:<id>` with a `String` payload. `attach` on an already-attached id is a
 successful no-op, which is what makes multiple simultaneous terminals safe. `pty_detach` kills
 the attach client only; the tmux session and the agent inside it survive.
@@ -357,7 +357,7 @@ const t = createTerm(mountEl, { fontSize = 12.5, scrollback = 8000, theme } = {}
 
 await t.attach(id);   // -> Promise<boolean>. Detaches any previous id first, clears the
                       //    screen, fits, subscribes to `pty:<id>`, opens the pty, focuses.
-                      //    Returns false and prints a red `argus: <err>` line on failure.
+                      //    Returns false and prints a red `athena: <err>` line on failure.
 await t.detach();     // -> Promise<void>. Unlistens, pty_detach, resets the screen.
 t.fit();              // re-measure; safe to call while hidden (throws are swallowed)
 t.focus();
@@ -460,7 +460,7 @@ all a reused card needs.
 # Verifying a shard
 
 ```bash
-cd /home/david/Documents/GitHub/tools/argus
+cd /home/david/Documents/GitHub/tools/athena
 npm run build
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
@@ -561,7 +561,7 @@ amber on focus. **Settled:** one `:focus-visible` rule in `style.css`, a 2px `--
 
 ## 7. Known dependencies and their exits
 
-* **`~/.argus/autopause-owned.json`** sits beside the contracted `autopause.json`. Pause
+* **`~/.athena/autopause-owned.json`** sits beside the contracted `autopause.json`. Pause
   ownership is persisted separately so a config save from the UI cannot clobber the record
   of which processes are currently frozen. Each entry carries the pane pid and that pid's
   kernel start time, so a recycled instance id can never make a later SIGCONT land on a
@@ -590,7 +590,7 @@ author ever saw the assembled program.
 Fixed here:
 
 * **The hooks could not run at all.** `package.json` declares `"type": "module"` and both hook
-  scripts used CommonJS `require`, so `hooks/argus-state.js` died with a `ReferenceError` on its
+  scripts used CommonJS `require`, so `hooks/athena-state.js` died with a `ReferenceError` on its
   first line at every event. Hooks are one of the three authorities, so every instance would have
   read `idle` forever: no needs-you, no resume id captured, and therefore no cost, no handoff and
   no working auto-pause. Both scripts are ES modules now, and the state file is written through a
@@ -631,7 +631,7 @@ Fixed here:
 
 Known and deliberately left, with the reasoning:
 
-* **No single-instance guard.** Two Argus processes would race the registry, the ownership file
+* **No single-instance guard.** Two Athena processes would race the registry, the ownership file
   and each other's selections. Reviewer called this uncertain because nothing establishes whether
   a second process is supported. It is not; the guard is still owed.
 * **No subprocess timeouts.** Every tmux, git and pbuild call is an unbounded `Command::output`
@@ -653,8 +653,29 @@ Known and deliberately left, with the reasoning:
 ## Verifying the integrated build
 
 ```bash
-cd /home/david/Documents/GitHub/tools/argus
+cd /home/david/Documents/GitHub/tools/athena
 pbuild run --weight 6G --label build -- npm run build
 pbuild run --weight 6G --label check -- cargo check --manifest-path src-tauri/Cargo.toml
 pbuild run --weight 6G --label test  -- cargo test  --manifest-path src-tauri/Cargo.toml
 ```
+
+## `adopt.rs` (v1.2)
+
+Brings a session or process Athena did not start into the fleet.
+
+| Command | Signature | Notes |
+|---|---|---|
+| `list_adoptable_sessions` | `() -> Vec<AdoptableSession>` | tmux sessions not prefixed `athena_`. Fields: `session`, `windows`, `cwd`, `command`, `attached`. |
+| `adopt_session` | `(session, name) -> Result<InstanceView, String>` | Renames the session to `athena_<id>`. `session` is re-checked against the live list, never trusted from the UI. |
+| `list_adoptable_processes` | `() -> Vec<AdoptableProcess>` | This user's `claude`/`codex` processes that have a tty and are not under any tmux pane. |
+| `reptyr_check` | `() -> ReptyrCheck` | `ok`, `reptyr`, `ptrace_scope`, `message`, `fix`. Read-only: it never writes `ptrace_scope`. |
+| `adopt_process` | `(pid, name) -> Result<InstanceView, String>` | Validates the pid and its owner BEFORE the reptyr preflight, so a bad pid reports as a bad pid. Cannot confirm the move; reptyr runs in the pane. |
+
+Identity: adoption relies on the session name being the identity, so `hooks/athena-state.js`
+resolves its id from `ATHENA_ID` when present and otherwise from `#{session_name}` via `$TMUX_PANE`.
+
+## `src/dnd.js` (v1.2)
+
+`MIME_INSTANCE` and `MIME_PANE` plus `dragPayload(dt)` and `isDroppable(dt)`. Acceptance during
+dragenter/dragover must use `isDroppable`, because `getData` is sealed until drop. A pane swap
+detaches both panes before either re-attaches; see the note on `pty.rs` keying one pty per id.

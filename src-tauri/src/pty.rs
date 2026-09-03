@@ -45,7 +45,7 @@ pub fn attach(app: tauri::AppHandle, ptys: State<PtyStore>, id: String, cols: u1
     cmd.arg("-t");
     cmd.arg(&sess);
     cmd.env("TERM", "xterm-256color");
-    // Argus is a terminal tool and is often launched from inside tmux. An inherited $TMUX makes
+    // Athena is a terminal tool and is often launched from inside tmux. An inherited $TMUX makes
     // the client refuse to nest ("sessions should be nested with care"), and it would exit
     // immediately into a handle this map would then cache as live.
     cmd.env_remove("TMUX");

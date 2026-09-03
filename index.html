@@ -3,12 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Argus</title>
+    <title>Athena</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <header>
-      <span class="wordmark">ARGUS</span>
+      <span class="wordmark">ATHENA</span>
       <span id="counts" class="counts"></span>
       <span class="spacer"></span>
       <span id="mount-cost" class="mount"></span>
@@ -17,6 +17,8 @@
       <button id="resume-all" class="ghost" title="pbuild resume-all">resume all</button>
       <button id="split" class="ghost" aria-pressed="false"
         title="split the stage into up to four live terminals">split</button>
+      <button id="adopt" class="ghost"
+        title="adopt a tmux session or a process Athena did not start">adopt</button>
       <button id="new" class="primary">+ instance</button>
     </header>
 
@@ -42,6 +44,8 @@
         <div id="term"></div>
       </section>
     </main>
+
+    <dialog id="adopter"></dialog>
 
     <dialog id="launcher">
       <form method="dialog">

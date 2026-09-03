@@ -94,7 +94,7 @@ export function createTerm(mountEl, opts = {}) {
         unlisten();
         unlisten = null;
       }
-      term.write(`\r\n\x1b[31margus: ${err}\x1b[0m\r\n`);
+      term.write(`\r\n\x1b[31mathena: ${err}\x1b[0m\r\n`);
       return false;
     }
   }

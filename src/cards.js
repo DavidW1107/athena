@@ -12,6 +12,7 @@ import {
   stateLabel,
 } from './api.js';
 import * as store from './store.js';
+import { MIME_INSTANCE } from './dnd.js';
 
 const el = (tag, cls) => {
   const n = document.createElement(tag);
@@ -69,6 +70,21 @@ export function card(i, h = {}) {
   });
 
   node.onclick = () => onSelect?.(i.id);
+
+  // Drag source for the split grid. A card only carries its instance id; what a drop
+  // means is entirely the pane's business, so the two never need to know each other.
+  // A dead instance has no pty to attach, so it is not draggable.
+  node.draggable = i.alive;
+  node.addEventListener('dragstart', (e) => {
+    if (!i.alive) {
+      e.preventDefault();
+      return;
+    }
+    e.dataTransfer.setData(MIME_INSTANCE, i.id);
+    e.dataTransfer.effectAllowed = 'move';
+    node.classList.add('dragging');
+  });
+  node.addEventListener('dragend', () => node.classList.remove('dragging'));
   return node;
 }
 

@@ -12,7 +12,7 @@ pub fn tmux(args: &[&str]) -> Option<std::process::Output> {
 }
 
 pub fn sess_name(id: &str) -> String {
-    format!("argus_{}", id)
+    format!("athena_{}", id)
 }
 
 pub fn tmux_alive(sess: &str) -> bool {
@@ -116,7 +116,7 @@ pub fn tmux_run(args: &[&str]) -> Result<(), String> {
 pub fn send_block(sess: &str, tag: &str, text: &str) -> Result<(), String> {
     if text.contains('\n') {
         let safe: String = tag.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-        let buf = format!("argus_paste_{}", safe);
+        let buf = format!("athena_paste_{}", safe);
         tmux_run(&["set-buffer", "-b", &buf, "--", text])
             .map_err(|e| format!("nothing sent, buffer not staged: {}", e))?;
         tmux_run(&["paste-buffer", "-d", "-p", "-b", &buf, "-t", sess]).map_err(|e| {

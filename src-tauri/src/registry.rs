@@ -11,7 +11,7 @@ use crate::tmux::{
     fg_pgid, git_group, is_stopped_pid, pane_map, send_block, sess_name, signal_group, tmux,
     tmux_alive,
 };
-use crate::util::{argus_dir, home, now};
+use crate::util::{athena_dir, home, now};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Instance {
@@ -27,7 +27,7 @@ pub struct Instance {
 }
 
 pub fn reg_path() -> PathBuf {
-    argus_dir().join("instances.json")
+    athena_dir().join("instances.json")
 }
 
 /// The registry is the only record of user intent, so a damaged file must never be mistaken
@@ -43,7 +43,7 @@ pub fn read_reg() -> Vec<Instance> {
             let aside = path.with_extension(format!("corrupt-{}", now()));
             let _ = fs::rename(&path, &aside);
             eprintln!(
-                "argus: {} did not parse ({}); moved to {} so it is not overwritten",
+                "athena: {} did not parse ({}); moved to {} so it is not overwritten",
                 path.display(),
                 err,
                 aside.display()
@@ -86,7 +86,7 @@ pub struct HookState {
 }
 
 pub fn read_state(id: &str) -> HookState {
-    fs::read_to_string(argus_dir().join("state").join(format!("{}.json", id)))
+    fs::read_to_string(athena_dir().join("state").join(format!("{}.json", id)))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
@@ -175,8 +175,8 @@ pub fn launch(cwd: String, cmd: String, name: String) -> Result<InstanceView, St
 
     let ok = tmux(&[
         "new-session", "-d", "-s", &sess, "-c", &cwd,
-        "-e", &format!("ARGUS_ID={}", id),
-        "-e", &format!("ARGUS_NAME={}", name),
+        "-e", &format!("ATHENA_ID={}", id),
+        "-e", &format!("ATHENA_NAME={}", name),
     ])
     .map(|o| o.status.success())
     .unwrap_or(false);
@@ -219,8 +219,8 @@ pub fn restore(id: String) -> Result<(), String> {
     }
     let ok = tmux(&[
         "new-session", "-d", "-s", &sess, "-c", &inst.cwd,
-        "-e", &format!("ARGUS_ID={}", id),
-        "-e", &format!("ARGUS_NAME={}", inst.name),
+        "-e", &format!("ATHENA_ID={}", id),
+        "-e", &format!("ATHENA_NAME={}", inst.name),
     ])
     .map(|o| o.status.success())
     .unwrap_or(false);
@@ -231,7 +231,7 @@ pub fn restore(id: String) -> Result<(), String> {
     // event, that stale record would be read as live state: a restored session showing `working`
     // from the previous run, a false needs-you notification, and an auto-pause decision taken on
     // a state nothing is producing any more.
-    let _ = fs::remove_file(argus_dir().join("state").join(format!("{}.json", id)));
+    let _ = fs::remove_file(athena_dir().join("state").join(format!("{}.json", id)));
 
     let line = match (&inst.session_id, inst.cmd.as_str()) {
         (Some(sid), c) if c.starts_with("claude") => format!("claude --resume {}", sid),
@@ -246,7 +246,7 @@ pub fn restore(id: String) -> Result<(), String> {
 /// Kill the session and forget the instance, in that order, and only if the kill actually
 /// happened. Forgetting an instance whose tmux session is still running orphans a live agent:
 /// the card disappears while the process keeps holding memory and editing the repository, with
-/// no route back to it through Argus.
+/// no route back to it through Athena.
 #[tauri::command]
 pub fn close(id: String) -> Result<(), String> {
     let sess = sess_name(&id);
@@ -265,7 +265,7 @@ pub fn close(id: String) -> Result<(), String> {
         }
         _ => {}
     }
-    let _ = fs::remove_file(argus_dir().join("state").join(format!("{}.json", id)));
+    let _ = fs::remove_file(athena_dir().join("state").join(format!("{}.json", id)));
     let reg: Vec<Instance> = read_reg().into_iter().filter(|i| i.id != id).collect();
     write_reg(&reg);
     Ok(())

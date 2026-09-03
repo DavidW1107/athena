@@ -1,4 +1,4 @@
-// Read-only views of the two out-of-process lanes Argus watches but does not own:
+// Read-only views of the two out-of-process lanes Athena watches but does not own:
 // codex-task runs under ~/.codex/tasks, and pbuild's machine-pressure gate.
 
 use std::fs;
@@ -79,7 +79,7 @@ fn pbuild(sub: &str) -> String {
 
 #[tauri::command]
 pub fn pbuild_status() -> String {
-    // ponytail: raw text panel. Parse it only if Argus ever needs to act on the numbers.
+    // ponytail: raw text panel. Parse it only if Athena ever needs to act on the numbers.
     pbuild("ls")
 }
 
