@@ -35,7 +35,7 @@ Comment=Watch and control every Claude Code and Codex instance in one window
 Exec=$HOME/.local/bin/athena
 Icon=athena
 Terminal=false
-Categories=Development;Utility;
+Categories=Development;
 Keywords=claude;codex;agent;terminal;tmux;instances;fleet;
 StartupWMClass=Athena
 DESKTOP
