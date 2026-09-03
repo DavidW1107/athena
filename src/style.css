@@ -18,6 +18,12 @@
      rationed accent and marks nothing except an instance waiting on you. */
   --working: #35d07f;
   --needs: #ffb224;
+  /* Washes of the accent, spelled out rather than derived. A mixed colour would keep one
+     source of truth, but the CSS minifier drops a literal fallback beside it as a duplicate
+     declaration, so an engine lacking that function would silently lose the tint. These two
+     move with --needs by hand; there are only two of them. */
+  --needs-wash: rgba(255, 178, 36, 0.14);
+  --needs-edge: rgba(255, 178, 36, 0.38);
   --idle: #9b948a;
   --dead: #ff5d55;
   --paused: #4da3ff;
@@ -83,13 +89,11 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   flex-wrap: wrap;
   gap: 8px;
   padding: 8px 14px;
-  background: rgba(255, 178, 36, 0.14);
-  background: color-mix(in srgb, var(--needs) 14%, transparent);
-  border-bottom: 1px solid rgba(255, 178, 36, 0.34);
-  border-bottom: 1px solid color-mix(in srgb, var(--needs) 34%, transparent);
+  background: var(--needs-wash);
+  border-bottom: 1px solid var(--needs-edge);
 }
 .attention b { color: var(--needs); font-family: var(--mono); font-size: 11px; }
-.attention button { border-color: rgba(255, 178, 36, 0.45); border-color: color-mix(in srgb, var(--needs) 45%, transparent); }
+.attention button { border-color: var(--needs-edge); }
 
 /* The shell is a flex column, so any block between the header and main (broadcast today,
    anything later) takes its own height and main keeps the remainder. Sizing main at
@@ -174,14 +178,6 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
 #mount-broadcast:not(:empty) { border-bottom: 1px solid var(--line); }
 #mount-handoff:not(:empty) { border-top: 1px solid var(--line); }
 
-/* A card being dragged to a pane. Cursor only on the card itself: the grab affordance
-   must not read as though the whole sidebar is draggable. */
-.card[draggable='true'] { cursor: grab; }
-.card.dragging { opacity: 0.45; cursor: grabbing; }
-
-@media (prefers-reduced-motion: reduce) {
-  .card.dragging { opacity: 1; }
-}
 
 /* Dialog panels: the Resume browser, the Codex lane and handoff, which used to live in a
    permanent sidebar and now cost nothing until opened. */
