@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Argus</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <span class="wordmark">ARGUS</span>
+      <span id="counts" class="counts"></span>
+      <span class="spacer"></span>
+      <span id="pressure" class="pressure" title="pbuild ls"></span>
+      <button id="resume-all" class="ghost" title="pbuild resume-all">resume all</button>
+      <button id="new" class="primary">+ instance</button>
+    </header>
+
+    <div id="attention" class="attention" hidden></div>
+
+    <main>
+      <aside>
+        <nav class="tabs">
+          <button data-tab="instances" class="on">Instances</button>
+          <button data-tab="sessions">Resume</button>
+          <button data-tab="codex">Codex</button>
+        </nav>
+        <div id="tab-instances" class="tab"></div>
+        <div id="tab-sessions" class="tab" hidden></div>
+        <div id="tab-codex" class="tab" hidden></div>
+      </aside>
+
+      <section class="stage">
+        <div id="stage-bar" class="stage-bar"><span class="muted">no instance selected</span></div>
+        <div id="term"></div>
+      </section>
+    </main>
+
+    <dialog id="launcher">
+      <form method="dialog">
+        <label>Directory
+          <input id="l-cwd" list="repos" autocomplete="off" spellcheck="false" />
+        </label>
+        <datalist id="repos"></datalist>
+        <label>Command
+          <select id="l-cmd">
+            <option value="claude">claude</option>
+            <option value="claude --continue">claude --continue</option>
+            <option value="codex">codex</option>
+            <option value="bash">bash</option>
+          </select>
+        </label>
+        <label>Name (optional)
+          <input id="l-name" autocomplete="off" />
+        </label>
+        <menu>
+          <button value="cancel" class="ghost">cancel</button>
+          <button id="l-go" value="go" class="primary">launch</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
