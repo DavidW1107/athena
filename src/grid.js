@@ -8,10 +8,10 @@
 // That is also what makes "as many as I open" affordable: N groups means N ptys, not N
 // instances. The grid never shrinks a tile below a readable width; it scrolls instead.
 
-import { closeInstance, restore, setPaused, stateLabel } from './api.js';
+import { closeInstance, restore, setGroup, setPaused, stateLabel, tmuxScroll } from './api.js';
 import * as store from './store.js';
 import { createTerm } from './term.js';
-import { MIME_TILE, dragPayload, isDroppable } from './dnd.js';
+import { MIME_INSTANCE, MIME_TILE, dragPayload, isDroppable } from './dnd.js';
 import './grid.css';
 
 const ORDER_KEY = 'athena.tileOrder';
@@ -152,15 +152,35 @@ export function mountGrid(host, opts = {}) {
     // Ctrl and the wheel is the terminal zoom, scoped to THIS terminal. Without
     // preventDefault the webview zooms the entire window instead, which is not what a
     // per-terminal size control should do.
+    // Capture phase, because xterm listens on its own element and would otherwise forward
+    // the wheel to the application first. Claude Code reads a forwarded wheel as "cycle
+    // through past messages", which is what made scrolling up walk the conversation instead
+    // of showing what had scrolled off the top.
     body.addEventListener(
       'wheel',
       (e) => {
-        if (!e.ctrlKey) return;
         e.preventDefault();
-        bumpFont(group, e.deltaY < 0 ? 1 : -1);
+        e.stopPropagation();
+        if (e.ctrlKey) {
+          bumpFont(group, e.deltaY < 0 ? 1 : -1);
+          return;
+        }
+        const tile = tiles.get(group);
+        if (!tile?.activeId) return;
+        // deltaMode 0 is pixels, 1 is already lines. Three lines a notch matches a terminal.
+        const lines = e.deltaMode === 1 ? Math.round(e.deltaY) : Math.round(e.deltaY / 40) || (e.deltaY > 0 ? 1 : -1);
+        tmuxScroll(tile.activeId, -lines).catch(() => {});
       },
-      { passive: false }
+      { passive: false, capture: true }
     );
+
+    // Double click the header to fill the window with this tile, again to put it back. A
+    // transient view, deliberately not persisted: it is a way to read something, not a layout.
+    head.addEventListener('dblclick', (e) => {
+      if (e.target.closest('button')) return;
+      e.preventDefault();
+      toggleZoom(group);
+    });
 
     root.append(head, body, grip);
 
@@ -197,10 +217,19 @@ export function mountGrid(host, opts = {}) {
     root.addEventListener('drop', (e) => {
       overDepth = 0;
       root.classList.remove('over');
-      const from = dragPayload(e.dataTransfer);
-      if (!from || from === group) return;
+      const payload = dragPayload(e.dataTransfer);
+      if (!payload) return;
       e.preventDefault();
-      reorder(from, group);
+      if (payload.kind === 'instance') {
+        // Merging two tiles is moving their instances: grouping lives on the instance, so
+        // nothing about the terminal or its session moves, only which tile draws it.
+        const inst = store.getInstance(payload.value);
+        if (inst && inst.group !== group) {
+          setGroup(payload.value, group).then(store.refresh).catch((err) => console.error('[athena] merge', err));
+        }
+      } else if (payload.value && payload.value !== group) {
+        reorder(payload.value, group);
+      }
     });
 
     // Keyboard equivalent of the ctrl-wheel zoom, so the size control is reachable without
@@ -376,6 +405,17 @@ export function mountGrid(host, opts = {}) {
     }
   }
 
+  /** Fill the grid with one tile, or restore the layout. Terminals refit themselves. */
+  function toggleZoom(group) {
+    const tile = tiles.get(group);
+    if (!tile) return;
+    const on = !tile.root.classList.contains('zoomed');
+    for (const t of tiles.values()) t.root.classList.remove('zoomed');
+    tile.root.classList.toggle('zoomed', on);
+    grid.classList.toggle('has-zoom', on);
+    if (on) focusTile(group);
+  }
+
   function focusTile(group) {
     const tile = tiles.get(group);
     if (!tile) return;
@@ -408,6 +448,14 @@ export function mountGrid(host, opts = {}) {
         if (i.id !== tile.activeId) setActive(tile, i.id);
         focusTile(tile.group);
       };
+      // Drag a tab onto another tile to move that instance there, which is also how two
+      // tiles that should have been one get merged.
+      tab.draggable = true;
+      tab.addEventListener('dragstart', (ev) => {
+        ev.stopPropagation();
+        ev.dataTransfer.setData(MIME_INSTANCE, i.id);
+        ev.dataTransfer.effectAllowed = 'move';
+      });
       tile.tabs.appendChild(tab);
     }
     // A single healthy instance needs no tab strip, but then the head is the only place
@@ -467,6 +515,7 @@ export function mountGrid(host, opts = {}) {
     for (const [g, tile] of [...tiles]) {
       if (groups.has(g)) continue;
       tiles.delete(g);
+      if (tile.root.classList.contains('zoomed')) grid.classList.remove('has-zoom');
       tile.gen += 1; // cancel anything still queued on this tile
       tile.root.remove();
       tile.term?.dispose();
@@ -502,6 +551,7 @@ export function mountGrid(host, opts = {}) {
 
   return {
     focusGroup: focusTile,
+    toggleZoom,
     zoom: bumpFont,
     resetZoom: resetFont,
     async destroy() {

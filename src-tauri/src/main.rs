@@ -30,6 +30,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             registry::list_instances,
             registry::launch_in,
+            registry::set_group,
+            registry::tmux_scroll,
             registry::restore,
             registry::close,
             registry::set_paused,

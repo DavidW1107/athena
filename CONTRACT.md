@@ -759,3 +759,27 @@ Do not identify a session by its first user message: it is stale within an hour,
 in one directory shares a cwd, so a dozen rows come out indistinguishable. `PastSession` and
 `RunningAgent` both carry `title` and `last_prompt`; `RunningAgent` adds `idle_secs` from the
 transcript mtime.
+
+## v1.8 tiles: grouping, merge, scrollback, zoom
+
+`launch_in` takes `own_tile: bool` as a fifth argument. Three distinct cases, and folding any two
+together is what caused the import bug:
+
+| Caller | group | own_tile | Result |
+|---|---|---|---|
+| tile `+` | `Some(g)` | false | joins tile `g` |
+| header `+` | `None` | **true** | a new tile, repo name with a counter |
+| import, resume | `None` | false | the repo's tile, shared |
+
+`set_group(id, group)` moves one instance between tiles. Grouping is stored per instance, so a
+merge is a reassignment and nothing about the session or its pty moves.
+
+`tmux_scroll(id, lines)` is the wheel. A wheel event that reaches the application is not
+scrollback: Claude Code reads it as "cycle through past messages". The wheel handler is registered
+in the CAPTURE phase and calls `stopPropagation`, because xterm listens on its own element and
+would otherwise forward it first. The command runs `copy-mode -e` then `send-keys -X -N n
+scroll-up|scroll-down`; `-e` leaves copy mode when the pane reaches the bottom. Verified:
+scroll_position 0 to 30 to 20, then copy mode exits on its own.
+
+Double clicking a tile header toggles `.zoomed` on the tile and `.has-zoom` on the grid, which
+hides the other tiles and lets the zoomed one span. Deliberately not persisted.

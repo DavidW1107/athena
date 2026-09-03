@@ -49,8 +49,14 @@ export const listInstances = () => invoke('list_instances');
  * Start an instance. `group` null means "give it its own tile"; passing a group name puts it
  * in that exact tile, which is what a tile's own + asks for.
  */
-export const launch = (cwd, cmd, name, group = null) =>
-  invoke('launch_in', { cwd, cmd, name, group });
+export const launch = (cwd, cmd, name, group = null, ownTile = false) =>
+  invoke('launch_in', { cwd, cmd, name, group, ownTile });
+
+/** Move an instance into another tile. Grouping is per instance, so a merge is a reassignment. */
+export const setGroup = (id, group) => invoke('set_group', { id, group });
+
+/** Scroll a pane's real history. Positive is up. See tmux_scroll for why this is not the wheel. */
+export const tmuxScroll = (id, lines) => invoke('tmux_scroll', { id, lines });
 
 /** Re-create a dead tmux session, resuming its Claude conversation when one is known. */
 export const restore = (id) => invoke('restore', { id });

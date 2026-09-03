@@ -205,3 +205,16 @@
     linear-gradient(135deg, transparent 0 48%, var(--ink) 48% 56%, transparent 56%),
     linear-gradient(135deg, transparent 0 72%, var(--ink) 72% 80%, transparent 80%);
 }
+
+/* Fullscreen one tile. Hiding the others rather than overlaying keeps the grid's own sizing
+   in charge, so the terminal refits through the same path as any other layout change. */
+.grid.has-zoom > .tile { display: none; }
+
+.grid.has-zoom > .tile.zoomed {
+  display: flex;
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+}
+
+.tile-tab { cursor: grab; }
+.tile-tab:active { cursor: grabbing; }

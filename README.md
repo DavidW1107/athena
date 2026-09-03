@@ -132,6 +132,12 @@ WCAG AA on `#1E1E1E`. That palette file also carries a `[Light]` section
 `+ instance` does the opposite: it always gives the new instance its own tile, appending a counter
 when the repo already has one, so "acmr-crm" and "acmr-crm 2" can sit side by side.
 
+**Merge, scroll and fullscreen.** Drag an instance's tab onto another tile to move it there,
+which is how two tiles that should have been one get merged. The wheel over a terminal scrolls that
+pane's real history through tmux copy-mode, not the application: a wheel event that reaches Claude
+Code is read as "cycle through past messages", which is not scrolling. Double click a tile header
+to fill the window with it, and again to put it back.
+
 **Resize and zoom.** Drag a tile's bottom-right grip to resize it, snapping to whole grid cells so
 the grid stays gapless: a free pixel size would take the tile out of its track and leave holes
 around it. Ctrl and the wheel over a terminal changes that terminal's font size only, as do

@@ -159,16 +159,21 @@ pub fn list_instances() -> Vec<InstanceView> {
 
 /// Start an instance.
 ///
-/// `group` is the tile it joins. `Some(g)` puts it in that exact tile, which is what a tile's
-/// own + button asks for. `None` means "give me my own tile": the repo name is still the base,
-/// but it is made unique, so launching twice in one repo from the header yields two tiles
-/// rather than a second tab in the first.
+/// Which tile this instance joins, in three cases that must stay distinct:
+///
+/// * `group = Some(g)`: that exact tile. A tile's own + button.
+/// * `own_tile = true`: a NEW tile, repo name with a counter if taken. The header's + button.
+/// * neither: the repo's tile, shared with anything else from that repo. Imports and resumes.
+///
+/// The third case used to be folded into the second, which is why two imported sessions from
+/// one repo landed in two tiles instead of one.
 #[tauri::command]
 pub fn launch_in(
     cwd: String,
     cmd: String,
     name: String,
     group: Option<String>,
+    own_tile: bool,
 ) -> Result<InstanceView, String> {
     if !PathBuf::from(&cwd).is_dir() {
         return Err(format!("no such directory: {}", cwd));
@@ -182,11 +187,13 @@ pub fn launch_in(
     let id = format!("{:x}", SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0) % 0xffff_ffff);
     let sess = sess_name(&id);
     let reg_now = read_reg();
+    let base = git_group(&cwd);
     let group = match group {
         Some(g) if !g.trim().is_empty() => g,
-        _ => unique_group(&git_group(&cwd), &reg_now),
+        _ if own_tile => unique_group(&base, &reg_now),
+        _ => base.clone(),
     };
-    let name = if name.trim().is_empty() { git_group(&cwd) } else { name };
+    let name = if name.trim().is_empty() { base.clone() } else { name };
 
     let ok = tmux(&[
         "new-session", "-d", "-s", &sess, "-c", &cwd,
@@ -372,4 +379,44 @@ fn unique_group(base: &str, reg: &[Instance]) -> String {
         }
     }
     format!("{} {}", base, now())
+}
+
+/// Move an instance into another tile. This is how two tiles that should have been one get
+/// merged: grouping is stored per instance, so a merge is a reassignment, not a move of state.
+#[tauri::command]
+pub fn set_group(id: String, group: String) -> Result<(), String> {
+    let group = group.trim().to_string();
+    if group.is_empty() {
+        return Err("a tile needs a name".into());
+    }
+    let mut reg = read_reg();
+    let inst = reg.iter_mut().find(|i| i.id == id).ok_or("unknown instance")?;
+    if inst.group == group {
+        return Ok(());
+    }
+    inst.group = group;
+    write_reg(&reg);
+    Ok(())
+}
+
+/// Scroll the pane's own history.
+///
+/// A wheel event that reaches the application is not scrollback: Claude Code reads it as "cycle
+/// through past messages", which is why scrolling up walked the conversation instead of showing
+/// what had scrolled off. tmux copy-mode is the only thing that can show real history while an
+/// application is drawing the screen, so the wheel is translated into it. `-e` leaves copy mode
+/// on its own once the user reaches the bottom again.
+#[tauri::command]
+pub fn tmux_scroll(id: String, lines: i32) -> Result<(), String> {
+    let sess = sess_name(&id);
+    if !tmux_alive(&sess) {
+        return Err("not running".into());
+    }
+    if lines == 0 {
+        return Ok(());
+    }
+    let n = lines.unsigned_abs().clamp(1, 50).to_string();
+    let _ = tmux(&["copy-mode", "-e", "-t", &sess]);
+    let verb = if lines > 0 { "scroll-up" } else { "scroll-down" };
+    crate::tmux::tmux_run(&["send-keys", "-t", &sess, "-X", "-N", &n, verb])
 }

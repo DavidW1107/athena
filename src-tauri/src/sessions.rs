@@ -194,6 +194,7 @@ pub fn past_sessions(cwd: String) -> Vec<PastSession> {
 #[tauri::command]
 pub fn resume_session(cwd: String, session_id: String, name: String) -> Result<InstanceView, String> {
     // A resumed conversation is a new instance and gets its own tile.
-    let v = launch_in(cwd, format!("claude --resume {}", session_id), name, None)?;
+    // A resumed session belongs with its repo, not in a tile of its own.
+    let v = launch_in(cwd, format!("claude --resume {}", session_id), name, None, false)?;
     Ok(v)
 }

@@ -520,11 +520,13 @@ pub fn import_agent(
     }
 
     let stopped = terminate_and_wait(pid);
+    // Grouped by repo, so importing several sessions from one repo gives one tile.
     let view = crate::registry::launch_in(
         cwd,
         format!("claude --resume {}", session_id),
         name,
         None,
+        false,
     )?;
     if !stopped {
         // The tile is up and usable, so this is a warning rather than a failure, but the user

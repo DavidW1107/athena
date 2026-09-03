@@ -66,7 +66,14 @@ export function mountLauncher({ dialog, openBtn, fields = {}, onLaunched }) {
     if (!cwd) return;
     localStorage.setItem(LAST_CWD, cwd);
     try {
-      const v = await launch(cwd, q(sel.cmd).value, q(sel.name).value.trim(), pendingGroup);
+      // No pending group means the header + asked, and that always opens its own tile.
+      const v = await launch(
+        cwd,
+        q(sel.cmd).value,
+        q(sel.name).value.trim(),
+        pendingGroup,
+        !pendingGroup
+      );
       q(sel.name).value = '';
       await store.refresh();
       onLaunched?.(v.id);
