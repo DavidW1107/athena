@@ -6,7 +6,10 @@
 //   * Nothing stale is ever sendable. The loaded messages are stamped with the exact
 //     source identity that produced them (id + cwd + session id + count). A change to
 //     any part of that identity clears them, bumps a generation token and reloads, and
-//     a late reply from a superseded request is dropped instead of committed.
+//     a late reply from a superseded request is dropped instead of committed. None of
+//     that identity moves when the source merely says more, so send re-reads the tail
+//     one last time and delivers what it just read: "the last n messages" is evaluated
+//     when the handoff happens, not when the preview was opened.
 //   * The 1s store tick never rebuilds the two <select> lists unless the fleet actually
 //     changed, so an open dropdown is not yanked out from under the pointer.
 //   * The two footguns are refused in both directions: an instance cannot be handed its
@@ -276,6 +279,37 @@ export function mountHandoff(host, opts = {}) {
 
     sending = true;
     updateActions();
+    setStatus(`reading the current tail…`);
+    // Re-read immediately before sending. The preview's key is id + cwd + session + count, and
+    // none of those move when the source simply says more, so a preview loaded a few turns ago
+    // would deliver a stale tail while the UI claimed it had sent the last n messages.
+    let fresh;
+    try {
+      fresh = await transcriptTail(ident.cwd, ident.sessionId, ident.count);
+    } catch (err) {
+      if (dead) return;
+      sending = false;
+      setStatus(`could not re-read the transcript: ${err}`, 'warn');
+      updateActions();
+      return;
+    }
+    if (dead) return;
+    if (!fresh.length) {
+      sending = false;
+      setStatus('that transcript has no messages to send', 'warn');
+      updateActions();
+      return;
+    }
+    // Show what is actually going, so the preview and the delivery can never disagree.
+    messages = fresh;
+    block = formatBlock(fresh, ident);
+    setPreview(
+      block.length > PREVIEW_CHARS
+        ? `${block.slice(0, PREVIEW_CHARS)}\n… ${block.length - PREVIEW_CHARS} more characters, all of it is sent`
+        : block,
+      false
+    );
+
     setStatus(`sending to ${label(target)}…`);
     try {
       await handoffSend(sourceId, targetId, block);

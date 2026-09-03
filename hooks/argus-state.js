@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 // Argus state emitter. Wired to every Claude Code hook event; writes one small JSON
 // file per instance under ~/.argus/state/. No output, never blocks, never fails loud.
-const fs = require('fs');
-const path = require('path');
+//
+// ES modules, because package.json declares "type": "module" for the whole project. Under
+// CommonJS `require` this file dies at its first line with a ReferenceError, and since the
+// hook is the sole authority for Claude state, every instance would read as idle forever.
+import fs from 'node:fs';
+import path from 'node:path';
 
 const id = process.env.ARGUS_ID;
 if (!id) process.exit(0); // not launched by Argus: nothing to report
@@ -57,7 +61,11 @@ process.stdin.on('end', () => {
 
   try {
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(next));
+    // Write and rename: the Rust side reads this file on a 1s poll and on every auto-pause
+    // signal gate, so it must never observe a half-written record and fall back to `idle`.
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(next));
+    fs.renameSync(tmp, file);
   } catch { /* state is best-effort; never break the session over it */ }
   process.exit(0);
 });

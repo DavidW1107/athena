@@ -348,7 +348,12 @@ export function mountPanes(host, opts = {}) {
   refreshPickers();
 
   return {
-    /** Detach every pty this grid opened, then tear the terminals down. */
+    /**
+     * Detach every pty this grid opened, then tear the terminals down. Awaited by the
+     * caller before it re-attaches any of those ids to another terminal: dispose() resolves
+     * once the pty is actually released, and a re-attach that overtook it would be a no-op
+     * followed by this detach killing the pty the new terminal thought it had.
+     */
     async destroy() {
       if (destroyed) return;
       destroyed = true;

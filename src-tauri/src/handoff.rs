@@ -266,11 +266,12 @@ pub fn transcript_tail(
     let mut tail: VecDeque<TranscriptMessage> = VecDeque::with_capacity(count + 1);
 
     for line in BufReader::new(file).lines() {
-        // A line that is not valid UTF-8 ends the read; whatever tail is already held is
-        // still the best answer available, and it is never a partial message.
+        // A line that is not valid UTF-8 is skipped, not fatal. Ending the scan there would
+        // silently return the tail from BEFORE the damage while the UI still claims it is the
+        // last n messages, which is the one outcome a handoff must never produce.
         let line = match line {
             Ok(l) => l,
-            Err(_) => break,
+            Err(_) => continue,
         };
         if line.trim().is_empty() {
             continue;

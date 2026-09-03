@@ -30,16 +30,42 @@ pub fn reg_path() -> PathBuf {
     argus_dir().join("instances.json")
 }
 
+/// The registry is the only record of user intent, so a damaged file must never be mistaken
+/// for an empty fleet: an empty read would let the next write replace the damage with nothing.
+/// A file that exists but does not parse is moved aside and reported, and the caller carries on
+/// with an empty list only when there genuinely is no registry.
 pub fn read_reg() -> Vec<Instance> {
-    fs::read_to_string(reg_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let path = reg_path();
+    let Ok(text) = fs::read_to_string(&path) else { return Vec::new() };
+    match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(err) => {
+            let aside = path.with_extension(format!("corrupt-{}", now()));
+            let _ = fs::rename(&path, &aside);
+            eprintln!(
+                "argus: {} did not parse ({}); moved to {} so it is not overwritten",
+                path.display(),
+                err,
+                aside.display()
+            );
+            Vec::new()
+        }
+    }
 }
 
+/// Write through a temporary file and rename over the original. A direct write truncates the
+/// live file first, so a crash or a full disk in the middle of it destroys the only copy of what
+/// the user asked to exist.
 pub fn write_reg(v: &[Instance]) {
-    if let Ok(s) = serde_json::to_string_pretty(v) {
-        let _ = fs::write(reg_path(), s);
+    let Ok(s) = serde_json::to_string_pretty(v) else { return };
+    let path = reg_path();
+    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
+    if fs::write(&tmp, s).is_err() {
+        let _ = fs::remove_file(&tmp);
+        return;
+    }
+    if fs::rename(&tmp, &path).is_err() {
+        let _ = fs::remove_file(&tmp);
     }
 }
 
@@ -136,6 +162,12 @@ pub fn launch(cwd: String, cmd: String, name: String) -> Result<InstanceView, St
     if !PathBuf::from(&cwd).is_dir() {
         return Err(format!("no such directory: {}", cwd));
     }
+    // Canonicalize on the way in. The registry owns directory intent, and every transcript
+    // lookup derives Claude's project slug from this exact string, so `.`, a trailing slash or
+    // a symlinked spelling would launch fine and then find no history, no usage and no handoff.
+    let cwd = fs::canonicalize(&cwd)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or(cwd);
     let id = format!("{:x}", SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0) % 0xffff_ffff);
     let sess = sess_name(&id);
     let group = git_group(&cwd);
@@ -151,13 +183,28 @@ pub fn launch(cwd: String, cmd: String, name: String) -> Result<InstanceView, St
     if !ok {
         return Err("tmux new-session failed (is tmux installed?)".into());
     }
-    tmux(&["send-keys", "-t", &sess, &cmd, "Enter"]);
+    // The session exists from here on, so a delivery failure is reported with the instance
+    // registered rather than thrown away: the user has a tmux session either way and needs the
+    // card to reach it.
+    let delivered = tmux(&["send-keys", "-t", &sess, &cmd, "Enter"])
+        .map(|o| o.status.success())
+        .unwrap_or(false);
 
     let inst = Instance { id, name, cwd, group, cmd, session_id: None, created: now() };
     let mut reg = read_reg();
     reg.push(inst.clone());
     write_reg(&reg);
-    Ok(list_instances().into_iter().find(|v| v.id == inst.id).unwrap())
+    let view = list_instances()
+        .into_iter()
+        .find(|v| v.id == inst.id)
+        .ok_or("the instance was launched but could not be written to the registry")?;
+    if !delivered {
+        return Err(format!(
+            "session {} is running but `{}` could not be sent to it; the pane is at a shell",
+            sess, inst.cmd
+        ));
+    }
+    Ok(view)
 }
 
 /// Bring back an instance whose tmux session died (app closed, laptop rebooted).
@@ -180,17 +227,44 @@ pub fn restore(id: String) -> Result<(), String> {
     if !ok {
         return Err("tmux new-session failed".into());
     }
+    // The old hook file describes the process that died. Until the new one writes its first
+    // event, that stale record would be read as live state: a restored session showing `working`
+    // from the previous run, a false needs-you notification, and an auto-pause decision taken on
+    // a state nothing is producing any more.
+    let _ = fs::remove_file(argus_dir().join("state").join(format!("{}.json", id)));
+
     let line = match (&inst.session_id, inst.cmd.as_str()) {
         (Some(sid), c) if c.starts_with("claude") => format!("claude --resume {}", sid),
         _ => inst.cmd.clone(),
     };
-    tmux(&["send-keys", "-t", &sess, &line, "Enter"]);
+    if !tmux(&["send-keys", "-t", &sess, &line, "Enter"]).map(|o| o.status.success()).unwrap_or(false) {
+        return Err(format!("the session was recreated but `{}` could not be sent to it", line));
+    }
     Ok(())
 }
 
+/// Kill the session and forget the instance, in that order, and only if the kill actually
+/// happened. Forgetting an instance whose tmux session is still running orphans a live agent:
+/// the card disappears while the process keeps holding memory and editing the repository, with
+/// no route back to it through Argus.
 #[tauri::command]
 pub fn close(id: String) -> Result<(), String> {
-    tmux(&["kill-session", "-t", &sess_name(&id)]);
+    let sess = sess_name(&id);
+    match tmux(&["kill-session", "-t", &sess]) {
+        // tmux is not reachable at all, so nothing was killed and nothing may be forgotten.
+        None => return Err("tmux is not on PATH; nothing was closed".into()),
+        // A failure here is almost always "session not found", which is the desired end state.
+        // Anything else is only a problem if the session is in fact still alive.
+        Some(o) if !o.status.success() && tmux_alive(&sess) => {
+            let e = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            return Err(format!(
+                "{} is still running and was not closed: {}",
+                sess,
+                if e.is_empty() { "tmux refused kill-session".into() } else { e }
+            ));
+        }
+        _ => {}
+    }
     let _ = fs::remove_file(argus_dir().join("state").join(format!("{}.json", id)));
     let reg: Vec<Instance> = read_reg().into_iter().filter(|i| i.id != id).collect();
     write_reg(&reg);

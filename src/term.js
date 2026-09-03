@@ -17,7 +17,7 @@ const THEME = { background: '#0a0908', foreground: '#e8e4dd', cursor: '#e0a03c' 
  *   await t.attach('a1b2c3');   // resolves once the pty is open, or writes the error
  *   t.fit();                    // re-measure after a layout change
  *   await t.detach();           // clears the screen, leaves the tmux session running
- *   t.dispose();                // detach + tear down the xterm; handle is dead after
+ *   await t.dispose();          // detach + tear down the xterm; handle is dead after
  *
  * @param {HTMLElement} mountEl
  * @param {{ fontSize?: number, scrollback?: number, theme?: object }} [opts]
@@ -27,7 +27,7 @@ const THEME = { background: '#0a0908', foreground: '#e8e4dd', cursor: '#e0a03c' 
  *   fit: () => void,
  *   focus: () => void,
  *   write: (s: string) => void,
- *   dispose: () => void,
+ *   dispose: () => Promise<void>,
  *   readonly attachedId: string|null,
  *   readonly term: Terminal
  * }}
@@ -99,19 +99,28 @@ export function createTerm(mountEl, opts = {}) {
     }
   }
 
+  /**
+   * Tear the handle down and return the pty detach, so a caller that is about to attach the
+   * same instance id somewhere else can await it. pty.rs keys one pty per id and `attach` on
+   * an already-attached id is a successful no-op, so a re-attach that overtakes this detach
+   * would be a no-op followed by the detach killing the pty both ends thought they had.
+   * @returns {Promise<void>} resolves once the pty is released.
+   */
   function dispose() {
-    if (disposed) return;
+    if (disposed) return Promise.resolve();
     disposed = true;
     ro.disconnect();
     if (unlisten) {
       unlisten();
       unlisten = null;
     }
+    let released = Promise.resolve();
     if (attachedId) {
-      ptyDetach(attachedId).catch(() => {});
+      released = ptyDetach(attachedId).catch(() => {});
       attachedId = null;
     }
     term.dispose();
+    return released;
   }
 
   return {

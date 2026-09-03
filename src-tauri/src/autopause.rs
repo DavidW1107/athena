@@ -1,13 +1,16 @@
 // Auto-pause: three independent rules that freeze an instance with SIGSTOP and let it go
 // again, plus the one safety rule this whole module exists for.
 //
-// A stopped process cannot service its own sockets, so a Claude turn frozen mid-flight times
+// A stopped process cannot service its own sockets, so an agent turn frozen mid-flight times
 // its API call out and the turn is destroyed. On screen that is indistinguishable from a hang.
 // So nothing whose hook state is `working` is ever stopped, whatever it is running, and
-// anything that might be the Claude CLI must additionally be sitting at `idle` or `needs-you`.
-// That check is re-read from the hook file at the signal gate, never taken from the fleet
-// snapshot the tick started with, because a tick that has just shelled out to tmux and read
-// pbuild's ledger is already hundreds of milliseconds stale.
+// anything that might be an agent CLI must additionally be POSITIVELY KNOWN to be sitting at
+// `idle` or `needs-you`. Absence of a hook file is absence of evidence, never idleness: that is
+// the permanent condition of a Codex instance, which nothing reports state for, so a Codex
+// session is never a candidate for an automatic stop. That check is re-read from the hook file
+// at the signal gate, never taken from the fleet snapshot the tick started with, because a tick
+// that has just shelled out to tmux and read pbuild's ledger is already hundreds of
+// milliseconds stale.
 //
 // Every signal goes through `registry::set_paused`, which resolves the pane's foreground pgid,
 // refuses a pgid of 1 or lower and signals that same resolved value inside one call. This
@@ -15,9 +18,11 @@
 // in which the resolved group could be replaced by another one.
 //
 // Ownership (which instance this module stopped, and which rules are holding it) is persisted
-// next to the config with the pane pid and that pid's kernel start time. A pause therefore
-// survives an Argus restart, and a recycled instance id can never make a later resume signal
-// land on a different job.
+// next to the config, the moment the stop succeeds, with the pane pid, that pid's kernel start
+// time, and the foreground pgid that was actually frozen. A pause therefore survives an Argus
+// restart; a recycled instance id cannot make a later resume signal land on a different job;
+// and neither can a pane that has since started a different foreground job, because the pgid is
+// compared before any SIGCONT is sent.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -311,41 +316,68 @@ fn basename(token: &str) -> &str {
     token.rsplit('/').next().unwrap_or(token)
 }
 
-/// True when any token of the command line names the Claude CLI, however it was invoked:
-/// `claude`, `/usr/bin/claude`, `env claude --continue`, `npx claude`, `sh -lc "cd x && claude"`.
-/// Deliberately over-inclusive; a false positive only makes the safety gate stricter, while a
-/// false negative would let a live turn be stopped.
-fn looks_like_claude(cmd: &str) -> bool {
+/// True when any token of the command line names an interactive agent CLI, however it was
+/// invoked: `claude`, `/usr/bin/claude`, `env claude --continue`, `npx claude`, `codex`,
+/// `sh -lc "cd x && claude"`. Deliberately over-inclusive; a false positive only makes the
+/// safety gate stricter, while a false negative would let a live turn be stopped.
+///
+/// Codex belongs here as much as Claude does. It is a first-class workload in this app and it
+/// makes the same long API calls, so it needs the same protection, even though nothing reports
+/// its state (see `stoppable`).
+fn looks_like_agent(cmd: &str) -> bool {
     cmd.split(|c: char| {
         c.is_whitespace() || matches!(c, '"' | '\'' | ';' | '&' | '|' | '(' | ')' | '`' | '=')
     })
     .filter(|t| !t.is_empty())
-    .any(|t| matches!(basename(t), "claude" | "claude-code"))
+    .any(|t| matches!(basename(t), "claude" | "claude-code" | "codex"))
 }
 
-/// The safety gate. Nothing mid-turn is ever stopped, and anything that might be Claude has to
-/// be parked at `idle` or `needs-you` first. `hook_state` must be freshly read.
-fn stoppable(cmd: &str, hook_state: &str) -> bool {
-    if hook_state == "working" {
+/// The safety gate, and the reason this module exists.
+///
+/// A stopped process cannot service its own sockets, so freezing an agent mid-turn times its
+/// API call out and destroys the turn. Nothing reporting `working` is ever stopped, and an
+/// agent must additionally be **positively known** to be parked at `idle` or `needs-you`.
+///
+/// `hook` is `None` when no hook file exists: nobody has reported anything about this instance.
+/// That is not idleness, it is absence of evidence, and it is the normal permanent condition
+/// for Codex, which has no hook equivalent. Treating it as idle is what would let a live Codex
+/// turn be frozen, so an agent with no signal is never stoppable. A build or a shell has no
+/// turn to destroy and needs no signal.
+fn stoppable(cmd: &str, hook: Option<&str>) -> bool {
+    if hook == Some("working") {
         return false;
     }
-    if looks_like_claude(cmd) {
-        return matches!(hook_state, "idle" | "needs-you");
+    if looks_like_agent(cmd) {
+        return matches!(hook, Some("idle") | Some("needs-you"));
     }
     true
+}
+
+/// Why the gate refused, in words the log can show the user.
+fn refusal(cmd: &str, hook: Option<&str>) -> String {
+    match hook {
+        Some("working") => "mid-turn; stopping it would time out the live API call".to_string(),
+        None if looks_like_agent(cmd) => {
+            "nothing reports this agent's state, so it cannot be shown to be idle; refusing to \
+             risk a live API call"
+                .to_string()
+        }
+        Some(state) => format!("state is {}; only an idle or waiting agent may be stopped", state),
+        None => "no state signal".to_string(),
+    }
 }
 
 struct Live {
     pane: i32,
     stopped: bool,
-    hook: String,
+    /// None means no hook file at all, which is never treated as idle. See `stoppable`.
+    hook: Option<String>,
 }
 
 /// Everything that can move between the start of a tick and a signal, read fresh.
 fn probe(id: &str) -> Option<Live> {
     let pane = pane_map().get(&sess_name(id)).copied()?;
-    let hook = read_state(id).state.unwrap_or_else(|| "idle".to_string());
-    Some(Live { pane, stopped: is_stopped_pid(pane), hook })
+    Some(Live { pane, stopped: is_stopped_pid(pane), hook: read_state(id).state })
 }
 
 // ---------------------------------------------------------------- signalling
@@ -374,14 +406,8 @@ fn commit_pause(
         out.push(act(id, &name, rule, "skipped", "no live tmux pane"));
         return;
     };
-    if !stoppable(&cmd, &live.hook) {
-        out.push(act(
-            id,
-            &name,
-            rule,
-            "skipped",
-            format!("mid-turn ({}); stopping it would time out the live API call", live.hook),
-        ));
+    if !stoppable(&cmd, live.hook.as_deref()) {
+        out.push(act(id, &name, rule, "skipped", refusal(&cmd, live.hook.as_deref())));
         return;
     }
     if live.stopped && !owned.contains_key(id) {
@@ -411,9 +437,14 @@ fn commit_pause(
         Ok(()) => {
             e.pane_pid = live.pane;
             e.pane_start = proc_start(live.pane).unwrap_or(0);
+            // Read the group AFTER the stop, when it is frozen and cannot be replaced under us,
+            // and persist immediately rather than at the end of the tick: a crash between the
+            // signal and the write would otherwise leave a frozen job that the next run reads as
+            // paused by hand and never releases.
             e.pgid = fg_pgid(&sess_name(id)).unwrap_or(0);
             e.since = now();
             owned.insert(id.to_string(), e);
+            write_owned(owned);
             out.push(act(id, &name, rule, "paused", why));
         }
         Err(err) => {
@@ -427,27 +458,42 @@ fn commit_pause(
     }
 }
 
-/// Start an instance again. Returns true when ownership may be forgotten, which happens only
-/// once the resume is proven: SIGCONT accepted and the job no longer in state T, or the pane
-/// gone entirely. A failure keeps the entry so the next tick retries.
+/// Start an instance again. Returns true when ownership may be forgotten.
+///
+/// Two things this does NOT do, both of which stranded a frozen job in earlier versions:
+///
+///   * It does not skip the SIGCONT because the job "looks like it is running". `is_stopped_pid`
+///     reads `/proc/<pgid>/stat`, and a process group outlives its leader, so a group whose
+///     leader has exited reads as running while its surviving members are still frozen. SIGCONT
+///     to a group that is already running is a no-op; not sending it leaves a job stopped with
+///     nothing left to unfreeze it. So the signal is always sent.
+///   * It does not signal a pane that has moved on. The pgid frozen at the stop is compared with
+///     the pane's foreground group now, so a pane whose job was resumed by hand and replaced by
+///     a different one is forgotten rather than signalled.
 fn try_resume(id: &str, name: &str, e: &mut Owned, out: &mut Vec<Action>) -> bool {
-    let Some(pane) = pane_map().get(&sess_name(id)).copied() else {
+    let sess = sess_name(id);
+    if !pane_map().contains_key(&sess) {
         out.push(act(id, name, "none", "notice", "process is gone; pause forgotten"));
         return true;
+    }
+    let Some(pgid) = fg_pgid(&sess) else {
+        out.push(act(id, name, "none", "notice", "no foreground job left in that pane; pause forgotten"));
+        return true;
     };
-    if !is_stopped_pid(pane) {
-        out.push(act(id, name, "none", "resumed", "already running"));
+    if e.pgid != 0 && pgid != e.pgid {
+        out.push(act(
+            id,
+            name,
+            "none",
+            "notice",
+            "that pane is running a different job now; pause forgotten rather than signalled",
+        ));
         return true;
     }
     match set_paused(id.to_string(), false) {
-        Ok(()) if !is_stopped_pid(pane) => {
+        Ok(()) => {
             out.push(act(id, name, "none", "resumed", "no rule holds it any more"));
             true
-        }
-        Ok(()) => {
-            e.resume_pending = true;
-            out.push(act(id, name, "none", "error", "SIGCONT sent but it is still stopped; retrying"));
-            false
         }
         Err(err) => {
             e.resume_pending = true;
@@ -461,7 +507,8 @@ fn try_resume(id: &str, name: &str, e: &mut Owned, out: &mut Vec<Action>) -> boo
 
 enum Pick {
     Take(String),
-    /// Pressure is high and there were candidates, but every one of them was mid-turn.
+    /// Pressure is high and there were candidates, but not one of them could be shown to be
+    /// safely stoppable: mid-turn, or an agent nothing reports state for.
     AllMidTurn,
     Nothing,
 }
@@ -488,13 +535,12 @@ fn memory_candidate(
             continue;
         }
         let hs = read_state(&inst.id);
-        let state = hs.state.clone().unwrap_or_else(|| "idle".to_string());
-        if !stoppable(&inst.cmd, &state) {
+        if !stoppable(&inst.cmd, hs.state.as_deref()) {
             mid_turn = true;
             continue;
         }
         let idle = now().saturating_sub(hs.ts.unwrap_or_else(now));
-        let band = if looks_like_claude(&inst.cmd) { 1 } else { 0 };
+        let band = if looks_like_agent(&inst.cmd) { 1 } else { 0 };
         cands.push((band, idle, inst.id.clone()));
     }
     cands.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
@@ -638,7 +684,7 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
                 "",
                 MEMORY,
                 "notice",
-                format!("{}, but every candidate is mid-turn; stopping one would kill its API call, so nothing was paused", head),
+                format!("{}, but no candidate can be shown to be safely idle; stopping one could kill a live API call, so nothing was paused", head),
             )),
             Pick::Nothing => out.push(act("", "", MEMORY, "notice", format!("{}, nothing left to pause", head))),
         }
@@ -755,21 +801,40 @@ mod tests {
 
     #[test]
     fn a_live_turn_is_never_stoppable() {
-        assert!(!stoppable("claude", "working"));
-        assert!(!stoppable("codex", "working"));
-        assert!(!stoppable("claude --continue", "dead"));
-        assert!(stoppable("claude", "idle"));
-        assert!(stoppable("claude", "needs-you"));
-        assert!(stoppable("npm run build", "idle"));
+        assert!(!stoppable("claude", Some("working")));
+        assert!(!stoppable("codex", Some("working")));
+        assert!(!stoppable("claude --continue", Some("dead")));
+        assert!(stoppable("claude", Some("idle")));
+        assert!(stoppable("claude", Some("needs-you")));
+        assert!(stoppable("npm run build", Some("idle")));
     }
 
     #[test]
-    fn claude_is_recognised_through_wrappers() {
-        for cmd in ["claude", "/usr/bin/claude", "env claude --continue", "npx claude", "sh -lc 'cd x && claude'"] {
-            assert!(looks_like_claude(cmd), "{}", cmd);
+    fn an_agent_nothing_reports_on_is_never_stoppable() {
+        // Codex has no hook, so its state is permanently unknown. Unknown is not idle: a
+        // stopped Codex loses the API call it was waiting on.
+        assert!(!stoppable("codex", None));
+        assert!(!stoppable("claude", None));
+        // A build or a shell has no turn to destroy, so no signal is needed to stop it.
+        assert!(stoppable("npm run build", None));
+        assert!(stoppable("bash", None));
+    }
+
+    #[test]
+    fn agents_are_recognised_through_wrappers() {
+        for cmd in [
+            "claude",
+            "/usr/bin/claude",
+            "env claude --continue",
+            "npx claude",
+            "sh -lc 'cd x && claude'",
+            "codex",
+            "/usr/local/bin/codex",
+        ] {
+            assert!(looks_like_agent(cmd), "{}", cmd);
         }
-        for cmd in ["codex", "bash", "npm run build", "claudette"] {
-            assert!(!looks_like_claude(cmd), "{}", cmd);
+        for cmd in ["bash", "npm run build", "claudette", "codexify"] {
+            assert!(!looks_like_agent(cmd), "{}", cmd);
         }
     }
 

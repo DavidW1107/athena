@@ -362,7 +362,9 @@ await t.detach();     // -> Promise<void>. Unlistens, pty_detach, resets the scr
 t.fit();              // re-measure; safe to call while hidden (throws are swallowed)
 t.focus();
 t.write(str);         // write straight to the screen, e.g. a local banner
-t.dispose();          // detach + tear the xterm down; the handle is dead afterwards
+await t.dispose();    // detach + tear the xterm down; the handle is dead afterwards.
+                      //    Resolves once the pty is released: await it before attaching the
+                      //    same id to another terminal.
 t.attachedId          // string | null (getter)
 t.term                // the raw xterm Terminal (getter), for addons
 ```
@@ -576,6 +578,77 @@ amber on focus. **Settled:** one `:focus-visible` rule in `style.css`, a 2px `--
   share a 44px row with the counts, the pressure readout and three buttons. Both resolved it
   with an absolutely positioned disclosure that adds no layout width. A third header shard
   needs a different slot, not a third disclosure.
+
+## 8. What the whole-repo cold review changed
+
+One two-turn cold review was run over the assembled repository (`~/.codex/tasks/
+20260903-210902-cold-integration/`): turn 1 with no brief and no contract, turn 2 with both,
+re-triaging every finding it had already committed to. It returned 28 findings, 23 of which
+survived its own re-triage. It found what a per-shard review structurally cannot: no shard
+author ever saw the assembled program.
+
+Fixed here:
+
+* **The hooks could not run at all.** `package.json` declares `"type": "module"` and both hook
+  scripts used CommonJS `require`, so `hooks/argus-state.js` died with a `ReferenceError` on its
+  first line at every event. Hooks are one of the three authorities, so every instance would have
+  read `idle` forever: no needs-you, no resume id captured, and therefore no cost, no handoff and
+  no working auto-pause. Both scripts are ES modules now, and the state file is written through a
+  temporary file and renamed so a 1s poll cannot read a half-written record.
+* **Auto-pause could freeze a live Codex turn.** The gate special-cased Claude and read a missing
+  hook file as `idle`. Codex has no hook equivalent, so its state is permanently absent, and
+  absent read as idle meant a Codex instance was not merely stoppable but ranked *ahead* of a
+  parked Claude session. Absence of evidence is no longer idleness: an agent (Claude or Codex)
+  must be positively reported at `idle` or `needs-you` before any signal, and `refusal()` says
+  which of those two reasons stopped it.
+* **A paused job could be stranded or the wrong one resumed.** `is_stopped_pid` reads
+  `/proc/<pgid>/stat`, and a process group outlives its leader, so a frozen group read as running
+  and the resume was skipped. SIGCONT is now always sent (it is a no-op on a running group), and
+  the foreground pgid frozen at the stop is compared before signalling, so a pane that has since
+  started a different job is forgotten rather than signalled. Ownership is persisted the moment a
+  stop succeeds rather than at the end of the tick.
+* **The registry could be destroyed by a crash.** `write_reg` truncated the live file, and
+  `read_reg` turned a parse failure into an empty fleet, so a partial write erased the only
+  record of user intent and the next write replaced it with nothing. Writes go through a
+  temporary file and a rename; a file that does not parse is moved aside and reported.
+* **`close` forgot instances it had not killed**, orphaning a live agent behind a vanished card.
+* **PTY handles outlived their clients.** An inherited `$TMUX` makes a nested `tmux attach` exit
+  immediately, and nothing removed the dead handle, so `attach`'s "already attached" no-op made
+  the terminal permanently unrecoverable. `TMUX` is now removed from the child environment, the
+  reader thread drops its own generation-matched entry on exit, and detach reaps the child.
+* **Handoff sent a stale tail.** The preview key does not move when the source simply says more,
+  so send re-reads the tail and delivers what it just read.
+* **Notifications gated the whole app**: a rejected permission call meant `store.start()` never
+  ran and nothing rendered.
+* Smaller: `pbuild` failures no longer read as success with empty output; launch and restore
+  report a failed `send-keys` instead of claiming success; `cwd` is canonicalized as it enters
+  the registry; restore clears the previous process's hook state; cost no longer double-counts an
+  API response written as several assistant records sharing one message id; session titles stream
+  the first 60 lines instead of reading whole multi-megabyte transcripts and no longer discard a
+  prompt for starting with `<`; one bad UTF-8 line no longer truncates a handoff tail; rapid
+  auto-pause edits persist the newest configuration; and auto-pause evaluates nothing until the
+  saved rules have loaded.
+
+Known and deliberately left, with the reasoning:
+
+* **No single-instance guard.** Two Argus processes would race the registry, the ownership file
+  and each other's selections. Reviewer called this uncertain because nothing establishes whether
+  a second process is supported. It is not; the guard is still owed.
+* **No subprocess timeouts.** Every tmux, git and pbuild call is an unbounded `Command::output`
+  on a polling or control path, so a wedged tmux server freezes the manager that exists to
+  supervise it.
+* **A multi-pane tmux session breaks targeting.** `pane_map` reads pane 0 while `send-keys -t
+  <session>` resolves the session's *current* pane, so state, signals and prompts can address
+  different jobs once a user splits a pane inside an attached instance. One pane per session is
+  an unenforced invariant.
+* **Transcript reads are not incremental.** Cost re-parses each live transcript from byte zero
+  every 10s. Correct, and O(history) on a memory-bound machine.
+* **UI actions still swallow backend errors.** Restore, pause, resume and close have no status
+  surface, so a rejection is invisible.
+* Auto-pause holding a `waiting` reason through an unreadable pbuild ledger, and holding
+  `blocked` until selection rather than until the state leaves `needs-you`, are both deliberate;
+  the reviewer withdrew them once it had the policy. Repository `group` is a display label, not
+  an identity, so basename collisions are cosmetic.
 
 ## Verifying the integrated build
 

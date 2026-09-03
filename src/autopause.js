@@ -67,6 +67,11 @@ export function mountAutopause(host, opts = {}) {
   let optionSig = '';
   let beat = 0;
   let saveChain = Promise.resolve();
+  let saveSeq = 0;
+  // No rule is evaluated until the saved configuration has been read. The defaults arm the
+  // memory rule, so a tick before the read lands could SIGSTOP an instance on a rule the
+  // user had switched off.
+  let booted = false;
 
   // ---------------------------------------------------------------- chrome
 
@@ -275,6 +280,7 @@ export function mountAutopause(host, opts = {}) {
   // ---------------------------------------------------------------- the tick
 
   async function runTick() {
+    if (!booted) return;
     if (ticking) {
       // A selection or an edit that arrives mid-tick is queued, never dropped: the blocked
       // rule has to release the instant the user selects what it parked.
@@ -312,9 +318,16 @@ export function mountAutopause(host, opts = {}) {
   function commit() {
     dirty = true;
     renderChip();
+    const mine = ++saveSeq;
+    // Snapshot at the click. The chained closure must not read the shared `rules` when it
+    // finally runs, or a second edit made while the first save is in flight gets written twice
+    // and the first response then overwrites it. Only the newest save may adopt its response.
+    const snapshot = JSON.parse(JSON.stringify(rules));
     saveChain = saveChain.then(async () => {
       try {
-        rules = await saveRules(rules);
+        const saved = await saveRules(snapshot);
+        if (mine !== saveSeq) return; // a later edit already owns the configuration
+        rules = saved;
         syncFields();
       } catch (err) {
         note('error', `could not save the rules: ${err}`);
@@ -425,6 +438,7 @@ export function mountAutopause(host, opts = {}) {
     } catch (err) {
       note('error', `could not read the rule config: ${err}`);
     } finally {
+      booted = true;
       form.disabled = false;
       runTick();
     }

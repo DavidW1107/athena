@@ -134,6 +134,14 @@ mountAutopause($('#mount-autopause'));
 // ------------------------------------------------------------------ boot
 
 (async () => {
-  notifyOk = (await isPermissionGranted()) || (await requestPermission()) === 'granted';
+  // Notifications are presentation. If the desktop notification service is missing or the
+  // permission call rejects, the fleet still has to render: gating store.start() on it left the
+  // whole app empty and stale because an optional convenience was unavailable.
+  try {
+    notifyOk = (await isPermissionGranted()) || (await requestPermission()) === 'granted';
+  } catch (err) {
+    notifyOk = false;
+    console.error('[argus] notifications unavailable', err);
+  }
   await store.start();
 })();

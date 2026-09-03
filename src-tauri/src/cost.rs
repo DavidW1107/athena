@@ -98,6 +98,7 @@ pub fn session_usage(cwd: String, session_id: String) -> Result<UsageSummary, St
     let mut message_count: u64 = 0;
     let mut model = String::new();
     let mut context_tokens: u64 = 0;
+    let mut last_msg_id = String::new();
 
     // filter_map, not map_while: one invalid-UTF-8 line must not truncate the
     // rest of the file and silently under-report every total after it.
@@ -117,7 +118,18 @@ pub fn session_usage(cwd: String, session_id: String) -> Result<UsageSummary, St
             _ => continue,
         };
 
-        message_count = message_count.saturating_add(1);
+        // Claude writes one API response as several assistant records when it interleaves
+        // thinking, text and tool use, and repeats the SAME usage object on each of them.
+        // Counting every copy inflates every total and the message count with it, so a record
+        // that repeats the message id its predecessor carried is read for its context size only.
+        let msg_id = value
+            .pointer("/message/id")
+            .and_then(|m| m.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let repeat = !msg_id.is_empty() && msg_id == last_msg_id;
+        last_msg_id = msg_id;
+
         if let Some(m) = value.pointer("/message/model").and_then(|m| m.as_str()) {
             model = m.to_string();
         }
@@ -126,10 +138,15 @@ pub fn session_usage(cwd: String, session_id: String) -> Result<UsageSummary, St
         let line_cache_read = field(usage, "cache_read_input_tokens");
         let line_cache_creation = field(usage, "cache_creation_input_tokens");
 
-        input_tokens = input_tokens.saturating_add(line_input);
-        output_tokens = output_tokens.saturating_add(field(usage, "output_tokens"));
-        cache_read_tokens = cache_read_tokens.saturating_add(line_cache_read);
-        cache_creation_tokens = cache_creation_tokens.saturating_add(line_cache_creation);
+        if !repeat {
+            message_count = message_count.saturating_add(1);
+            input_tokens = input_tokens.saturating_add(line_input);
+            output_tokens = output_tokens.saturating_add(field(usage, "output_tokens"));
+            cache_read_tokens = cache_read_tokens.saturating_add(line_cache_read);
+            cache_creation_tokens = cache_creation_tokens.saturating_add(line_cache_creation);
+        }
+        // Occupancy is the newest record's own numbers either way: a repeat carries the same
+        // snapshot, and taking it again is harmless and keeps this the last word in the file.
         context_tokens = line_input
             .saturating_add(line_cache_read)
             .saturating_add(line_cache_creation);

@@ -58,23 +58,32 @@ pub fn codex_tasks() -> Vec<CodexTask> {
     out
 }
 
+/// Run one pbuild subcommand and return what the user needs to see.
+///
+/// The contract for both commands is raw stdout, but stdout alone cannot distinguish "it worked
+/// and printed nothing" from "it failed and did nothing", and the second of those is a silent
+/// no-op behind a button the user believes acted. A non-zero exit is therefore reported in the
+/// text itself, which is the only channel this API has.
+fn pbuild(sub: &str) -> String {
+    let Ok(o) = Command::new("pbuild").arg(sub).output() else {
+        return "pbuild not found".into();
+    };
+    let out = String::from_utf8_lossy(&o.stdout).to_string();
+    if o.status.success() {
+        return out;
+    }
+    let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
+    let code = o.status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into());
+    format!("pbuild {} failed (exit {}): {}\n{}", sub, code, err, out).trim_end().to_string()
+}
+
 #[tauri::command]
 pub fn pbuild_status() -> String {
     // ponytail: raw text panel. Parse it only if Argus ever needs to act on the numbers.
-    Command::new("pbuild")
-        .arg("ls")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_else(|| "pbuild not found".into())
+    pbuild("ls")
 }
 
 #[tauri::command]
 pub fn pbuild_resume_all() -> String {
-    Command::new("pbuild")
-        .arg("resume-all")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_else(|| "pbuild not found".into())
+    pbuild("resume-all")
 }
