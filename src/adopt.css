@@ -96,3 +96,17 @@
   border: 1px solid var(--line);
   border-radius: 4px;
 }
+
+/* Provenance line under a row: pid, short session id, age, directory. Quiet on purpose,
+   because the session's own name above it is what the eye should land on. */
+.adopt-row-meta {
+  margin-top: 2px;
+  font: 10px/1.4 var(--mono);
+  color: var(--idle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adopt-row-title { font-weight: 600; }
+.adopt-row-sub { white-space: normal; }

@@ -373,7 +373,7 @@ mod tests {
 // Termination happens BEFORE the resume, not after. Two live processes appending to one
 // transcript is the failure this is guarding against, and only that ordering rules it out.
 
-use crate::sessions::{first_user_text, project_slug};
+use crate::sessions::{project_slug, session_info};
 
 #[derive(Serialize, Clone, Debug)]
 pub struct RunningAgent {
@@ -384,7 +384,13 @@ pub struct RunningAgent {
     /// None means the process began a fresh session and its id is not recoverable from /proc;
     /// the UI asks which transcript it is rather than guessing on the user's behalf.
     pub session_id: Option<String>,
+    /// Claude Code's own name for the session. The first user message is useless for telling a
+    /// dozen long-running sessions apart, and they all share one cwd here, so this is the field
+    /// that actually identifies a row.
     pub title: Option<String>,
+    pub last_prompt: Option<String>,
+    /// Seconds since the transcript was last written, so a stale process is obvious.
+    pub idle_secs: u64,
 }
 
 /// `--resume <uuid>` or `-r <uuid>` in a process's argv.
@@ -444,10 +450,30 @@ pub fn list_running_agents() -> Vec<RunningAgent> {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
         let session_id = session_id_from_argv(&cmd);
-        let title = session_id
-            .as_ref()
-            .and_then(|sid| first_user_text(&transcript_path(&cwd, sid)));
-        out.push(RunningAgent { pid, cmd: cmd.chars().take(120).collect(), cwd, session_id, title });
+        let mut title = None;
+        let mut last_prompt = None;
+        let mut idle_secs = 0;
+        if let Some(sid) = session_id.as_ref() {
+            let path = transcript_path(&cwd, sid);
+            let info = session_info(&path);
+            title = info.title;
+            last_prompt = info.last_prompt;
+            idle_secs = fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+        }
+        out.push(RunningAgent {
+            pid,
+            cmd: cmd.chars().take(120).collect(),
+            cwd,
+            session_id,
+            title,
+            last_prompt,
+            idle_secs,
+        });
     }
     out.sort_by_key(|a| a.pid);
     out

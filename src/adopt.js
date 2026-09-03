@@ -66,10 +66,20 @@ export function mountAdopt({ dialog, openBtn, onAdopted }) {
     }
   }
 
-  function row(title, sub, actionLabel, onAction, disabled = false) {
+  /** Seconds to something a human can compare at a glance. */
+  function ago(secs) {
+    if (!Number.isFinite(secs) || secs < 0) return '';
+    if (secs < 90) return 'just now';
+    if (secs < 5400) return `${Math.round(secs / 60)}m ago`;
+    if (secs < 172800) return `${Math.round(secs / 3600)}h ago`;
+    return `${Math.round(secs / 86400)}d ago`;
+  }
+
+  function row(title, sub, actionLabel, onAction, disabled = false, meta = '') {
     const r = el('div', 'adopt-row');
     const text = el('div', 'adopt-text');
     text.append(el('div', 'adopt-row-title', title), el('div', 'adopt-row-sub', sub));
+    if (meta) text.append(el('div', 'adopt-row-meta', meta));
     const btn = el('button', 'primary', actionLabel);
     btn.type = 'button';
     btn.disabled = disabled;
@@ -91,10 +101,12 @@ export function mountAdopt({ dialog, openBtn, onAdopted }) {
     sel.className = 'adopt-pick';
     sel.append(Object.assign(document.createElement('option'), { value: '', textContent: 'pick a session' }));
     for (const s of await pastSessions(cwd)) {
+      const when = new Date(s.mtime * 1000).toLocaleString();
+      const tail = s.last_prompt ? `  |  ${s.last_prompt.slice(0, 60)}` : '';
       sel.append(
         Object.assign(document.createElement('option'), {
           value: s.session_id,
-          textContent: `${new Date(s.mtime * 1000).toLocaleString()}  ${s.title}`,
+          textContent: `${s.title}${tail}  (${when})`,
         })
       );
     }
@@ -133,17 +145,33 @@ export function mountAdopt({ dialog, openBtn, onAdopted }) {
       runSection.appendChild(all);
     }
     for (const r of running) {
-      const sub = `${r.cwd}${r.title ? ` and ${r.title}` : ''}`;
       if (r.session_id) {
+        // The session's own name leads, because that is the only thing that tells a dozen
+        // long-running sessions apart. Everything else is provenance, on the quiet line.
+        const heading = r.title || '(untitled session)';
+        const sub = r.last_prompt || 'no prompt recorded yet';
+        const meta = `pid ${r.pid}  ${r.session_id.slice(0, 8)}  ${ago(r.idle_secs)}  ${r.cwd}`;
         runSection.appendChild(
-          row(`pid ${r.pid}  ${r.session_id.slice(0, 8)}`, sub, 'import', () =>
-            adopt(() => importAgent(r.pid, r.session_id, r.cwd, r.title || ''), `pid ${r.pid}`)
+          row(
+            heading,
+            sub,
+            'import',
+            () => adopt(() => importAgent(r.pid, r.session_id, r.cwd, r.title || ''), heading),
+            false,
+            meta
           )
         );
       } else {
         // Started fresh, so its id is not in argv and nothing in /proc reveals it. Ask
         // rather than guess: a wrong guess resumes somebody else's conversation.
-        const rowEl = row(`pid ${r.pid}`, `${r.cwd}  (started fresh, choose its session)`, 'import', () => {}, true);
+        const rowEl = row(
+          `pid ${r.pid}: started fresh, choose its session`,
+          'Its id is not in its command line and nothing in /proc reveals it, so picking is on you.',
+          'import',
+          () => {},
+          true,
+          r.cwd
+        );
         const pick = await sessionPicker(r.cwd);
         const btn = rowEl.querySelector('button');
         pick.onchange = () => {

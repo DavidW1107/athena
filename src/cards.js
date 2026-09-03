@@ -71,7 +71,8 @@ export function mountSessions(host, h = {}) {
         const r = el('div', 'row');
         r.innerHTML = '<div class="row-title"></div><div class="row-sub"></div>';
         r.querySelector('.row-title').textContent = s.title;
-        r.querySelector('.row-sub').textContent = new Date(s.mtime * 1000).toLocaleString();
+        r.querySelector('.row-sub').textContent =
+          `${new Date(s.mtime * 1000).toLocaleString()}${s.last_prompt ? `  |  ${s.last_prompt}` : ''}`;
         r.onclick = async () => {
           const v = await resumeSession(cwd, s.session_id, s.title.slice(0, 24));
           await store.refresh();

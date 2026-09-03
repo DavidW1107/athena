@@ -746,3 +746,16 @@ Chrome heights: header 26px, tile header 22px min, grid gap and padding 6px.
 
 The terminate-before-launch ordering is load bearing. Reversing it allows a window where two
 processes append to one transcript, which is the thing the feature exists to avoid.
+
+## v1.7 session identity
+
+`sessions::session_info(path) -> SessionInfo { title, last_prompt }` is the one way to describe a
+session to a human. It reads the LAST `ai-title` (Claude Code's own generated name) and
+`last-prompt` records from the transcript, scanning only the final 512KB because those records are
+rewritten as the session goes on. It falls back to `first_user_text` only when a session is too
+young to have been titled.
+
+Do not identify a session by its first user message: it is stale within an hour, and every session
+in one directory shares a cwd, so a dozen rows come out indistinguishable. `PastSession` and
+`RunningAgent` both carry `title` and `last_prompt`; `RunningAgent` adds `idle_secs` from the
+transcript mtime.

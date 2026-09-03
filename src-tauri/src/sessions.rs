@@ -13,6 +13,8 @@ use crate::util::home;
 
 #[derive(Serialize, Clone)]
 pub struct PastSession {
+    #[serde(default)]
+    pub last_prompt: Option<String>,
     pub session_id: String,
     pub title: String,
     pub mtime: u64,
@@ -32,6 +34,73 @@ pub fn project_slug(cwd: &str) -> String {
 /// A record that does not fit the shape is skipped rather than ending the search, and injected
 /// content is identified by its tags rather than by the first character. `<div> is not closing`
 /// is a real prompt, and handoff.rs carries a test that says so.
+/// The last `max` bytes of a file, trimmed forward to the next line boundary.
+///
+/// Claude Code rewrites its `ai-title` and `last-prompt` records as a session goes on, so the
+/// useful copy is always the final one. Reading the tail keeps listing a dozen sessions cheap
+/// even when a transcript has grown to megabytes.
+fn tail_text(path: &PathBuf, max: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let from = len.saturating_sub(max);
+    f.seek(SeekFrom::Start(from)).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf).to_string();
+    Some(if from == 0 {
+        text
+    } else {
+        // The first line is almost certainly cut in half; drop it.
+        match text.find('\n') {
+            Some(i) => text[i + 1..].to_string(),
+            None => text,
+        }
+    })
+}
+
+/// What a session actually IS, for a human choosing between a dozen of them.
+///
+/// `title` is Claude Code's own generated name for the session (`ai-title`), which is the only
+/// field that reliably distinguishes one from another: the first user message is stale after an
+/// hour, and every session in one directory shares a cwd. `last_prompt` says what it was doing
+/// most recently. Both fall back to None rather than to something misleading.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct SessionInfo {
+    pub title: Option<String>,
+    pub last_prompt: Option<String>,
+}
+
+pub fn session_info(path: &PathBuf) -> SessionInfo {
+    let mut info = SessionInfo::default();
+    if let Some(tail) = tail_text(path, 512 * 1024) {
+        for line in tail.lines() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            match v.get("type").and_then(|t| t.as_str()) {
+                Some("ai-title") => {
+                    if let Some(t) = v.get("aiTitle").and_then(|t| t.as_str()) {
+                        info.title = Some(t.chars().take(80).collect());
+                    }
+                }
+                Some("last-prompt") => {
+                    if let Some(t) = v.get("lastPrompt").and_then(|t| t.as_str()) {
+                        let t = t.trim();
+                        if !t.is_empty() {
+                            info.last_prompt = Some(t.chars().take(120).collect());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // A session too young to have been titled still needs something on its row.
+    if info.title.is_none() {
+        info.title = first_user_text(path);
+    }
+    info
+}
+
 pub fn first_user_text(path: &PathBuf) -> Option<String> {
     let file = fs::File::open(path).ok()?;
     for line in BufReader::new(file).lines().take(60) {
@@ -107,8 +176,10 @@ pub fn past_sessions(cwd: String) -> Vec<PastSession> {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             let sid = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            let info = session_info(&p);
             out.push(PastSession {
-                title: first_user_text(&p).unwrap_or_else(|| "(no prompt)".into()),
+                title: info.title.unwrap_or_else(|| "(untitled session)".into()),
+                last_prompt: info.last_prompt,
                 session_id: sid,
                 mtime,
                 cwd: cwd.clone(),
