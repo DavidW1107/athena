@@ -58,6 +58,9 @@ export const setGroup = (id, group) => invoke('set_group', { id, group });
 /** Scroll a pane's real history. Positive is up. See tmux_scroll for why this is not the wheel. */
 export const tmuxScroll = (id, lines) => invoke('tmux_scroll', { id, lines });
 
+/** Leave copy mode, so a keystroke after scrolling reaches the agent instead of the scroller. */
+export const endScroll = (id) => invoke('end_scroll', { id });
+
 /** Re-create a dead tmux session, resuming its Claude conversation when one is known. */
 export const restore = (id) => invoke('restore', { id });
 

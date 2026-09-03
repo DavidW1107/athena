@@ -44,6 +44,13 @@ chmod 644 "$desktop"
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
+if pgrep -x athena >/dev/null 2>&1; then
+  echo
+  echo "NOTE: Athena is currently running an older build. Quit and reopen it, or the changes"
+  echo "      you just installed will not be in the window you are looking at."
+  echo
+fi
+
 echo "Installed:"
 echo "  $HOME/.local/bin/athena"
 echo "  $desktop"

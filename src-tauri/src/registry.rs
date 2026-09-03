@@ -420,3 +420,10 @@ pub fn tmux_scroll(id: String, lines: i32) -> Result<(), String> {
     let verb = if lines > 0 { "scroll-up" } else { "scroll-down" };
     crate::tmux::tmux_run(&["send-keys", "-t", &sess, "-X", "-N", &n, verb])
 }
+
+/// Called when the user types after scrolling, so keys reach the agent and not copy mode.
+#[tauri::command]
+pub fn end_scroll(id: String) -> Result<(), String> {
+    crate::tmux::end_copy_mode(&sess_name(&id));
+    Ok(())
+}

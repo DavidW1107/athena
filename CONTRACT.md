@@ -783,3 +783,21 @@ scroll_position 0 to 30 to 20, then copy mode exits on its own.
 
 Double clicking a tile header toggles `.zoomed` on the tile and `.has-zoom` on the grid, which
 hides the other tiles and lets the zoomed one span. Deliberately not persisted.
+
+## v1.9 scrollback, continued
+
+Facts measured on a live Claude pane, which is why the wheel is routed the way it is:
+`alternate_on=0` (so real scrollback exists), `history_size` in the hundreds, and
+`mouse_any_flag=0` (Claude Code does not request mouse events, so nothing was forwarding the
+wheel to it from tmux; it was being handled browser-side).
+
+`tmux::ensure_server_options()` runs once at startup and sets `history-limit` to 50000. It is
+read when a pane is CREATED, so it must be set before `new-session`; raising it later does not
+affect existing panes.
+
+`end_scroll(id)` cancels copy mode, and the grid calls it on the first non-modifier keydown after
+a wheel event (`tile.scrolled`). Without it the scroll fix creates a new trap: scroll up, type,
+and the keys drive the scroller instead of the agent.
+
+tmux `mouse on` was considered and rejected. It would route the wheel natively, but it also takes
+over selection, so dragging to select would fill a tmux buffer instead of the system clipboard.

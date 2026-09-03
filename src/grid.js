@@ -8,7 +8,7 @@
 // That is also what makes "as many as I open" affordable: N groups means N ptys, not N
 // instances. The grid never shrinks a tile below a readable width; it scrolls instead.
 
-import { closeInstance, restore, setGroup, setPaused, stateLabel, tmuxScroll } from './api.js';
+import { closeInstance, endScroll, restore, setGroup, setPaused, stateLabel, tmuxScroll } from './api.js';
 import * as store from './store.js';
 import { createTerm } from './term.js';
 import { MIME_INSTANCE, MIME_TILE, dragPayload, isDroppable } from './dnd.js';
@@ -169,6 +169,7 @@ export function mountGrid(host, opts = {}) {
         if (!tile?.activeId) return;
         // deltaMode 0 is pixels, 1 is already lines. Three lines a notch matches a terminal.
         const lines = e.deltaMode === 1 ? Math.round(e.deltaY) : Math.round(e.deltaY / 40) || (e.deltaY > 0 ? 1 : -1);
+        tile.scrolled = true;
         tmuxScroll(tile.activeId, -lines).catch(() => {});
       },
       { passive: false, capture: true }
@@ -232,6 +233,21 @@ export function mountGrid(host, opts = {}) {
       }
     });
 
+    // Scrolling leaves the pane in tmux copy mode, where keystrokes drive the scroller
+    // rather than the agent. The first key after a scroll cancels it, so typing behaves the
+    // way it does in any terminal: you scroll up to read, start typing, and you are back.
+    root.addEventListener(
+      'keydown',
+      (e) => {
+        const tile = tiles.get(group);
+        if (!tile?.scrolled) return;
+        if (e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta') return;
+        tile.scrolled = false;
+        if (tile.activeId) endScroll(tile.activeId).catch(() => {});
+      },
+      { capture: true }
+    );
+
     // Keyboard equivalent of the ctrl-wheel zoom, so the size control is reachable without
     // a pointer. Bound on the tile so it applies to whichever terminal has focus.
     root.addEventListener('keydown', (e) => {
@@ -262,6 +278,7 @@ export function mountGrid(host, opts = {}) {
       grip,
       term: null,
       activeId: null,
+      scrolled: false,
       chain: Promise.resolve(),
       gen: 0,
     };

@@ -130,3 +130,26 @@ pub fn send_block(sess: &str, tag: &str, text: &str) -> Result<(), String> {
     tmux_run(&["send-keys", "-t", sess, "Enter"])
         .map_err(|e| format!("text is in the pane but was not submitted: {}", e))
 }
+
+/// Server options Athena wants in place before it creates any session.
+///
+/// tmux defaults to 2000 lines of history, which is thin for reading back through an agent
+/// conversation. This is a server-wide option read when a pane is CREATED, so it has to be set
+/// before new-session; raising it later does not affect panes that already exist.
+pub fn ensure_server_options() {
+    let _ = tmux(&["set-option", "-g", "history-limit", "50000"]);
+}
+
+/// Leave copy mode if the pane is in it, so typing after a scroll reaches the application.
+///
+/// Without this the wheel creates a new trap: scroll up, type, and the keys are eaten by
+/// copy-mode bindings instead of reaching Claude. `send-keys -X` is an error outside copy mode,
+/// so the mode is checked first rather than firing blind.
+pub fn end_copy_mode(sess: &str) {
+    let in_mode = tmux(&["display-message", "-t", sess, "-p", "#{pane_in_mode}"])
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
+        .unwrap_or(false);
+    if in_mode {
+        let _ = tmux(&["send-keys", "-t", sess, "-X", "cancel"]);
+    }
+}

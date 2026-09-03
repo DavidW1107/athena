@@ -24,6 +24,7 @@ use pty::PtyStore;
 
 fn main() {
     util::athena_dir();
+    tmux::ensure_server_options();
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(PtyStore::default())
@@ -32,6 +33,7 @@ fn main() {
             registry::launch_in,
             registry::set_group,
             registry::tmux_scroll,
+            registry::end_scroll,
             registry::restore,
             registry::close,
             registry::set_paused,
