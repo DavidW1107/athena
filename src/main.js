@@ -1,246 +1,139 @@
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+// CONVERGENCE POINT. Wiring only: create the store, mount each panel onto its
+// element, start the polls. No feature logic lives here, and a feature shard never
+// edits this file - integration adds its import and its one mount call below.
+
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import '@xterm/xterm/css/xterm.css';
+
+import { pbuildResumeAll } from './api.js';
+import * as store from './store.js';
+import { createTerm } from './term.js';
+import { mountAttention, mountCards, mountCodex, mountCounts, mountSessions, mountStageBar } from './cards.js';
+import { mountLauncher } from './launcher.js';
+import { mountAutopause } from './autopause.js';
+import { mountBroadcast } from './broadcast.js';
+import { mountCost } from './cost.js';
+import { mountHandoff } from './handoff.js';
+import { mountPanes } from './panes.js';
 
 const $ = (s) => document.querySelector(s);
-const STATE_LABEL = { working: 'working', 'needs-you': 'needs you', idle: 'idle', dead: 'not running', ended: 'ended', paused: 'paused' };
-
-let instances = [];
-let selected = null;
-let term = null, fit = null, unlisten = null, attachedId = null;
-let lastStates = new Map();
-let notifyOk = false;
 
 // ------------------------------------------------------------------ terminal
 
-function ensureTerm() {
-  if (term) return;
-  term = new Terminal({
-    fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
-    fontSize: 12.5,
-    theme: { background: '#0a0908', foreground: '#e8e4dd', cursor: '#e0a03c' },
-    scrollback: 8000,
-    allowProposedApi: true,
-  });
-  fit = new FitAddon();
-  term.loadAddon(fit);
-  term.open($('#term'));
-  term.onData((d) => attachedId && invoke('pty_write', { id: attachedId, data: d }));
-  new ResizeObserver(() => {
-    if (!attachedId) return;
-    fit.fit();
-    invoke('pty_resize', { id: attachedId, cols: term.cols, rows: term.rows });
-  }).observe($('#term'));
-}
+const term = createTerm($('#term'));
 
-async function select(id) {
-  if (attachedId === id) return;
-  ensureTerm();
-  if (unlisten) { unlisten(); unlisten = null; }
-  if (attachedId) { await invoke('pty_detach', { id: attachedId }); attachedId = null; }
-  term.reset();
-  selected = id;
-  const inst = instances.find((i) => i.id === id);
-  if (!inst || !inst.alive) { render(); return; }
-  fit.fit();
-  unlisten = await listen(`pty:${id}`, (e) => term.write(e.payload));
-  try {
-    await invoke('attach', { id, cols: term.cols, rows: term.rows });
-    attachedId = id;
-    term.focus();
-  } catch (err) {
-    term.write(`\r\n\x1b[31margus: ${err}\x1b[0m\r\n`);
-  }
-  render();
-}
+// Exactly one thing owns the ptys: either this single stage terminal or the split grid,
+// never both. pty.rs keys one pty per instance id, so a hidden #term still attached to an
+// id a pane also holds would make that pane's detach kill the shared pty, and this file's
+// `attachedId === id` guard would then refuse to bring it back. `panes` non-null means the
+// grid owns every attach, and the stage term is detached before the grid is ever mounted.
+let panes = null;
 
-// ------------------------------------------------------------------ render
-
-function card(i) {
-  const el = document.createElement('div');
-  el.className = 'card' + (i.id === selected ? ' sel' : '');
-  el.dataset.state = i.state;
-  const detail = i.state === 'working' && i.tool ? i.tool : (i.summary || i.cmd);
-  el.innerHTML = `
-    <div class="banner"></div>
-    <div class="card-body">
-      <div class="card-top">
-        <span class="card-name"></span>
-        <span class="card-state">${STATE_LABEL[i.state] || i.state}</span>
-      </div>
-      <div class="card-sub"></div>
-      <div class="card-actions"></div>
-    </div>`;
-  el.querySelector('.card-name').textContent = i.name;
-  el.querySelector('.card-sub').textContent = detail || '';
-  const acts = el.querySelector('.card-actions');
-  const btn = (label, fn) => {
-    const b = document.createElement('button');
-    b.textContent = label;
-    b.onclick = (e) => { e.stopPropagation(); fn(); };
-    acts.appendChild(b);
-  };
-  if (!i.alive) btn('restore', () => invoke('restore', { id: i.id }).then(refresh));
-  else if (i.paused) btn('resume', () => invoke('set_paused', { id: i.id, paused: false }).then(refresh));
-  else btn('pause', () => invoke('set_paused', { id: i.id, paused: true }).then(refresh));
-  btn('close', () => confirm(`Close ${i.name}?`) && invoke('close', { id: i.id }).then(() => { if (selected === i.id) { selected = null; attachedId = null; } refresh(); }));
-  el.onclick = () => select(i.id);
-  return el;
-}
-
-function render() {
-  const pane = $('#tab-instances');
-  pane.replaceChildren();
-  const groups = new Map();
-  for (const i of instances) {
-    if (!groups.has(i.group)) groups.set(i.group, []);
-    groups.get(i.group).push(i);
-  }
-  for (const [g, list] of [...groups].sort((a, b) => a[0].localeCompare(b[0]))) {
-    const h = document.createElement('div');
-    h.className = 'group-label';
-    h.textContent = `${g} · ${list.length}`;
-    pane.appendChild(h);
-    for (const i of list) pane.appendChild(card(i));
-  }
-  if (!instances.length) {
-    pane.innerHTML = '<p class="muted">No instances. Hit <b>+ instance</b>.</p>';
-  }
-
-  const needs = instances.filter((i) => i.state === 'needs-you');
-  const strip = $('#attention');
-  strip.hidden = !needs.length;
-  strip.replaceChildren();
-  if (needs.length) {
-    const b = document.createElement('b');
-    b.textContent = `needs you (${needs.length})`;
-    strip.appendChild(b);
-    for (const i of needs) {
-      const btn = document.createElement('button');
-      btn.textContent = `${i.group}/${i.name}`;
-      btn.onclick = () => select(i.id);
-      strip.appendChild(btn);
-    }
-  }
-
-  const alive = instances.filter((i) => i.alive).length;
-  $('#counts').textContent = `${alive}/${instances.length} live · ${needs.length} waiting`;
-
-  const inst = instances.find((i) => i.id === selected);
-  $('#stage-bar').innerHTML = inst
-    ? `<span>${inst.name}</span><span class="muted">${inst.cwd}</span><span class="muted">${STATE_LABEL[inst.state] || inst.state}</span>`
-    : '<span class="muted">no instance selected</span>';
-}
-
-// ------------------------------------------------------------------ polling
-
-async function refresh() {
-  instances = await invoke('list_instances');
-  for (const i of instances) {
-    const prev = lastStates.get(i.id);
-    if (prev && prev !== 'needs-you' && i.state === 'needs-you' && notifyOk) {
-      sendNotification({ title: `${i.group} · ${i.name}`, body: i.summary || 'waiting on you' });
-    }
-    lastStates.set(i.id, i.state);
-  }
-  render();
-}
-
-async function refreshPressure() {
-  const txt = await invoke('pbuild_status');
-  const line = txt.split('\n').find((l) => l.startsWith('pressure:')) || txt.split('\n')[0] || '';
-  $('#pressure').textContent = line.trim();
-}
-
-// ------------------------------------------------------------------ tabs
-
-async function renderSessions() {
-  const pane = $('#tab-sessions');
-  pane.replaceChildren();
-  const cwds = [...new Set(instances.map((i) => i.cwd))];
-  if (!cwds.length) { pane.innerHTML = '<p class="muted">Launch something first; this lists past sessions for those directories.</p>'; return; }
-  for (const cwd of cwds) {
-    const h = document.createElement('div');
-    h.className = 'group-label';
-    h.textContent = cwd.split('/').pop();
-    pane.appendChild(h);
-    const rows = await invoke('past_sessions', { cwd });
-    for (const s of rows) {
-      const r = document.createElement('div');
-      r.className = 'row';
-      r.innerHTML = '<div class="row-title"></div><div class="row-sub"></div>';
-      r.querySelector('.row-title').textContent = s.title;
-      r.querySelector('.row-sub').textContent = new Date(s.mtime * 1000).toLocaleString();
-      r.onclick = async () => {
-        const v = await invoke('resume_session', { cwd, sessionId: s.session_id, name: s.title.slice(0, 24) });
-        await refresh();
-        select(v.id);
-      };
-      pane.appendChild(r);
-    }
-  }
-}
-
-async function renderCodex() {
-  const pane = $('#tab-codex');
-  pane.replaceChildren();
-  const rows = await invoke('codex_tasks');
-  if (!rows.length) { pane.innerHTML = '<p class="muted">No codex-task runs in ~/.codex/tasks.</p>'; return; }
-  for (const t of rows) {
-    const r = document.createElement('div');
-    r.className = 'row';
-    r.innerHTML = '<div class="row-title"></div><div class="row-sub"></div>';
-    r.querySelector('.row-title').textContent = `${t.status === 'running' ? '● ' : ''}${t.name}`;
-    r.querySelector('.row-sub').textContent = `${t.status} · ${t.tail}`;
-    r.title = t.dir;
-    pane.appendChild(r);
-  }
-}
-
-for (const b of document.querySelectorAll('.tabs button')) {
-  b.onclick = () => {
-    document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
-    for (const t of ['instances', 'sessions', 'codex']) $(`#tab-${t}`).hidden = t !== b.dataset.tab;
-    if (b.dataset.tab === 'sessions') renderSessions();
-    if (b.dataset.tab === 'codex') renderCodex();
-  };
-}
-
-// ------------------------------------------------------------------ launcher
-
-$('#new').onclick = async () => {
-  const repos = await invoke('list_repos');
-  $('#repos').replaceChildren(...repos.map((r) => Object.assign(document.createElement('option'), { value: r })));
-  $('#l-cwd').value = localStorage.getItem('lastCwd') || repos[0] || '';
-  $('#launcher').showModal();
+// Every attach, detach and mode change runs in order on one chain, so a click during a
+// mode switch cannot interleave with the detach it is waiting on.
+let stage = Promise.resolve();
+const onStage = (fn) => {
+  stage = stage.then(fn).catch((err) => console.error('[argus] stage', err));
+  return stage;
 };
 
-$('#launcher').addEventListener('close', async (e) => {
-  if ($('#launcher').returnValue !== 'go') return;
-  const cwd = $('#l-cwd').value.trim();
-  if (!cwd) return;
-  localStorage.setItem('lastCwd', cwd);
-  try {
-    const v = await invoke('launch', { cwd, cmd: $('#l-cmd').value, name: $('#l-name').value.trim() });
-    $('#l-name').value = '';
-    await refresh();
-    select(v.id);
-  } catch (err) {
-    alert(err);
+function select(id) {
+  store.setSelected(id);
+  return onStage(async () => {
+    if (panes) return; // the grid owns the terminals in split mode
+    if (term.attachedId === id) return;
+    const inst = store.getInstance(id);
+    if (!inst || !inst.alive) return term.detach();
+    await term.attach(id);
+  });
+}
+
+function setSplit(on) {
+  return onStage(async () => {
+    if (on === Boolean(panes)) return;
+    if (on) {
+      await term.detach(); // hand every id back before the grid claims one
+      panes = mountPanes($('#mount-panes'));
+    } else {
+      const grid = panes;
+      panes = null;
+      await grid.destroy(); // async: it awaits pending attaches before disposing
+      const inst = store.getSelectedInstance();
+      if (inst && inst.alive) await term.attach(inst.id);
+    }
+    const split = Boolean(panes);
+    splitBtn.textContent = split ? 'single' : 'split';
+    splitBtn.setAttribute('aria-pressed', String(split));
+    splitBtn.classList.toggle('primary', split);
+  });
+}
+
+// ------------------------------------------------------------------ panels
+
+mountCards($('#tab-instances'), {
+  onSelect: select,
+  onClosed: (id) => {
+    if (store.getSelected() !== id) return;
+    store.setSelected(null);
+    onStage(() => (panes ? undefined : term.detach()));
+  },
+});
+mountAttention($('#attention'), { onSelect: select });
+mountCounts($('#counts'));
+mountStageBar($('#stage-bar'));
+
+const sessions = mountSessions($('#tab-sessions'), { onResumed: select });
+const codex = mountCodex($('#tab-codex'));
+
+mountLauncher({ dialog: $('#launcher'), openBtn: $('#new'), onLaunched: select });
+
+// ------------------------------------------------------------------ header
+
+store.subscribePressure((txt) => {
+  const line = txt.split('\n').find((l) => l.startsWith('pressure:')) || txt.split('\n')[0] || '';
+  $('#pressure').textContent = line.trim();
+});
+
+$('#resume-all').onclick = () => pbuildResumeAll().then(store.refreshPressure);
+
+const splitBtn = $('#split');
+splitBtn.onclick = () => setSplit(!panes);
+
+// ------------------------------------------------------------------ notifications
+
+let notifyOk = false;
+store.subscribe(({ changed }) => {
+  if (!notifyOk) return;
+  for (const c of changed) {
+    if (!c.from || c.from === 'needs-you' || c.to !== 'needs-you') continue;
+    const i = store.getInstance(c.id);
+    if (i) sendNotification({ title: `${i.group} · ${i.name}`, body: i.summary || 'waiting on you' });
   }
 });
 
-$('#resume-all').onclick = () => invoke('pbuild_resume_all').then(refreshPressure);
+// ------------------------------------------------------------------ tabs
+
+const TABS = ['instances', 'sessions', 'codex'];
+for (const b of document.querySelectorAll('.tabs button')) {
+  b.onclick = () => {
+    document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
+    for (const t of TABS) $(`#tab-${t}`).hidden = t !== b.dataset.tab;
+    if (b.dataset.tab === 'sessions') sessions.render();
+    if (b.dataset.tab === 'codex') codex.render();
+  };
+}
+
+// ------------------------------------------------------------------ feature mounts
+// One import above and one mount call here per shard. Panes is the exception: it owns the
+// stage's ptys, so it is mounted and unmounted by the split toggle rather than at boot.
+
+mountBroadcast($('#mount-broadcast'));
+mountCost($('#mount-cost'));
+mountHandoff($('#mount-handoff'));
+mountAutopause($('#mount-autopause'));
 
 // ------------------------------------------------------------------ boot
 
 (async () => {
   notifyOk = (await isPermissionGranted()) || (await requestPermission()) === 'granted';
-  await refresh();
-  await refreshPressure();
-  setInterval(refresh, 1000);
-  setInterval(refreshPressure, 5000);
+  await store.start();
 })();

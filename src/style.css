@@ -14,6 +14,10 @@
 
 * { box-sizing: border-box; }
 
+/* One focus ring for the whole app. The amber is the needs-you signal and is not spent on
+   focus; keyboard focus is the ink hairline at 2px. */
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
 html, body {
   margin: 0;
   height: 100%;
@@ -52,6 +56,9 @@ button {
 button.primary { background: rgba(255, 255, 255, 0.1); }
 button:hover { background: rgba(255, 255, 255, 0.14); }
 
+/* The strip is emptied rather than hidden when nothing needs you, so :empty is what
+   takes it out of the layout. */
+.attention:empty { display: none; }
 .attention {
   display: flex;
   flex-wrap: wrap;
@@ -63,7 +70,13 @@ button:hover { background: rgba(255, 255, 255, 0.14); }
 .attention b { color: var(--needs); font-family: var(--mono); font-size: 11px; }
 .attention button { border-color: rgba(224, 160, 60, 0.45); }
 
-main { display: flex; height: calc(100% - 44px); }
+/* The shell is a flex column, so any block between the header and main (broadcast today,
+   anything later) takes its own height and main keeps the remainder. Sizing main at
+   calc(100% - 44px) instead would push its bottom off-screen under body { overflow: hidden }
+   the moment a second block appeared. */
+body { display: flex; flex-direction: column; }
+body > header, body > .attention, body > .mount { flex: none; }
+main { display: flex; flex: 1 1 auto; min-height: 0; }
 aside {
   width: 330px;
   flex: none;
@@ -153,3 +166,11 @@ dialog input, dialog select {
   border-radius: 5px;
 }
 dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 0; }
+
+/* Feature mount points. Each stays out of the layout until its shard fills it;
+   a shard styles its own subtree from its own CSS file and never edits this one. */
+.mount:empty { display: none; }
+#mount-panes:not(:empty) { flex: 1; min-height: 0; display: flex; }
+#mount-panes:not(:empty) ~ #term { display: none; }
+#mount-broadcast:not(:empty) { border-bottom: 1px solid var(--line); }
+#mount-handoff:not(:empty) { border-top: 1px solid var(--line); }

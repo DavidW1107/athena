@@ -1,0 +1,237 @@
+/* Broadcast panel. Every selector is prefixed .bc / .bc- so five shards sharing one
+   global bundle cannot collide. Tokens only: no new hex, no :root block. */
+
+/* --- bar ---------------------------------------------------------------------- */
+
+.bc {
+  background: var(--panel);
+}
+
+.bc-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 14px;
+}
+
+.bc-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  padding: 2px 0;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.bc-toggle:hover {
+  background: transparent;
+  color: var(--ink);
+}
+.bc-caret {
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.bc-toggle[aria-expanded='true'] {
+  color: var(--ink);
+}
+.bc-toggle[aria-expanded='true'] .bc-caret {
+  transform: rotate(90deg);
+}
+
+.bc-count,
+.bc-status,
+.bc-hint,
+.bc-state {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.bc-count[data-armed='true'] {
+  color: var(--ink);
+}
+.bc-status {
+  margin-left: auto;
+  text-align: right;
+}
+.bc-status[data-tone='ok'] {
+  color: var(--working);
+}
+.bc-status[data-tone='warn'] {
+  color: var(--needs);
+}
+
+/* --- body --------------------------------------------------------------------- */
+
+.bc-body {
+  padding: 9px 14px 11px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(280px, 2fr);
+  gap: 12px 22px;
+  align-items: start;
+}
+.bc-body[hidden] {
+  display: none;
+}
+
+.bc-targets {
+  max-height: 132px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+.bc-group + .bc-group {
+  margin-top: 8px;
+}
+.bc-group-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+.bc-group-head .group-label {
+  margin: 0;
+}
+
+.bc-target {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 0 2px 17px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.bc-target:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.bc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+.bc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bc-state {
+  margin-left: auto;
+  padding-left: 8px;
+}
+.bc-box {
+  accent-color: var(--needs);
+  margin: 0;
+  flex: none;
+}
+.bc-box:disabled,
+.bc-target:has(.bc-box:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.bc-empty {
+  margin: 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+/* --- compose ------------------------------------------------------------------- */
+
+.bc-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 4px;
+}
+.bc-text {
+  display: block;
+  width: 100%;
+  resize: vertical;
+  min-height: 42px;
+  font: 12px/1.5 var(--mono);
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 7px 8px;
+}
+.bc-text::placeholder {
+  color: var(--dim);
+}
+.bc-text:disabled {
+  opacity: 0.6;
+}
+
+.bc-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 7px;
+}
+.bc-hint {
+  margin-right: auto;
+}
+.bc-send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.bc-send:disabled:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* --- failures ------------------------------------------------------------------ */
+
+.bc-fails {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 6px 0 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+.bc-fails li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+}
+.bc-fails li::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dead);
+  flex: none;
+}
+.bc-why {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+}
+
+/* --- narrow + motion ------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .bc-body {
+    grid-template-columns: 1fr;
+  }
+  .bc-targets {
+    max-height: 108px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bc-caret {
+    transition: none;
+  }
+}

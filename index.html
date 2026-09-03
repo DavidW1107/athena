@@ -11,12 +11,17 @@
       <span class="wordmark">ARGUS</span>
       <span id="counts" class="counts"></span>
       <span class="spacer"></span>
+      <span id="mount-cost" class="mount"></span>
+      <span id="mount-autopause" class="mount"></span>
       <span id="pressure" class="pressure" title="pbuild ls"></span>
       <button id="resume-all" class="ghost" title="pbuild resume-all">resume all</button>
+      <button id="split" class="ghost" aria-pressed="false"
+        title="split the stage into up to four live terminals">split</button>
       <button id="new" class="primary">+ instance</button>
     </header>
 
     <div id="attention" class="attention" hidden></div>
+    <div id="mount-broadcast" class="mount"></div>
 
     <main>
       <aside>
@@ -28,10 +33,12 @@
         <div id="tab-instances" class="tab"></div>
         <div id="tab-sessions" class="tab" hidden></div>
         <div id="tab-codex" class="tab" hidden></div>
+        <div id="mount-handoff" class="mount"></div>
       </aside>
 
       <section class="stage">
         <div id="stage-bar" class="stage-bar"><span class="muted">no instance selected</span></div>
+        <div id="mount-panes" class="mount"></div>
         <div id="term"></div>
       </section>
     </main>

@@ -32,15 +32,30 @@ States: `working` (green) · `needs-you` (amber, pulsing) · `idle` (grey) · `p
 
 ## Panels
 
-- **Instances** — grouped by git repo. Click a card to attach its terminal. Pause sends
+- **Instances**: grouped by git repo. Click a card to attach its terminal. Pause sends
   `SIGSTOP` to the pane's foreground process group; resume sends `SIGCONT`.
-- **Resume** — past Claude sessions for any directory Argus knows about, titled by their
+- **Resume**: past Claude sessions for any directory Argus knows about, titled by their
   first real user message, one click to `claude --resume`.
-- **Codex** — the `codex-task` runs in `~/.codex/tasks`, live status from their `status` file.
+- **Codex**: the `codex-task` runs in `~/.codex/tasks`, live status from their `status` file.
 
 The header shows the `pbuild ls` pressure line and a **resume all** button.
 
-## Not built yet
+## v1.1
 
-Split terminals (one attached at a time), broadcast-to-many, per-instance cost meters,
-auto-pause triggers, cross-instance handoff. Add them when the daily use asks for them.
+- **Split panes.** The **split** button in the header turns the stage into a 1 / 2 / 4 grid,
+  each pane attached to a different instance. One owner at a time: in split mode the grid
+  holds every pty, and switching back to single re-attaches the selected instance.
+- **Broadcast.** One prompt, typed once, delivered to a checked set of live instances. A
+  multi-line prompt is pasted with bracketed paste, so an agent reads it as one turn; a
+  plain `bash` instance has no bracketed-paste mode and runs each line.
+- **Context burn.** A header readout for the hottest session and a disclosure with one row
+  per live instance: input, output, cache share, current window occupancy and its
+  percentage, read from the Claude transcript. Nothing is priced; the plan is a
+  subscription, so the only question is which instance needs a compact.
+- **Handoff.** Take the last n messages of one instance's conversation and paste them into
+  another as a single prompt. An instance cannot be handed its own history, and a dead
+  target is refused before anything is typed.
+- **Auto-pause.** Three rules with a log of the last ten actions and the reason for each:
+  memory pressure over a PSI threshold, an instance waiting on another pbuild shard, and a
+  session blocked on you for too long. Nothing mid-turn is ever stopped, because a stopped
+  process cannot service its own sockets and the live API call would time out.
