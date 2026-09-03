@@ -18,12 +18,13 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 use serde::Serialize;
 
 use crate::registry::{list_instances, read_reg, write_reg, Instance, InstanceView};
 use crate::tmux::{git_group, pane_map, sess_name, tmux, tmux_run};
-use crate::util::{now, proc_stat_fields};
+use crate::util::{home, now, proc_stat_fields};
 
 /// Same shape as the id registry::launch mints, so ids stay indistinguishable by origin.
 fn new_id() -> String {
@@ -359,4 +360,150 @@ mod tests {
         assert!(which("sh"), "sh must be on PATH");
         assert!(!which("athena-not-a-real-binary"));
     }
+}
+
+// ---------------------------------------------------------------- importing a running claude
+//
+// The common case on this machine is a dozen claudes running in ordinary terminal windows, none
+// of them under tmux. There is no way to move such a process into Athena without ptrace, so
+// import does the other thing that reaches the same place: it reads the session id the process
+// is already running, terminates it, and starts `claude --resume <id>` inside a tile. The
+// conversation continues from its transcript; only a turn in flight is lost.
+//
+// Termination happens BEFORE the resume, not after. Two live processes appending to one
+// transcript is the failure this is guarding against, and only that ordering rules it out.
+
+use crate::sessions::{first_user_text, project_slug};
+
+#[derive(Serialize, Clone, Debug)]
+pub struct RunningAgent {
+    pub pid: i32,
+    pub cmd: String,
+    pub cwd: String,
+    /// Read from the process's own argv when it was started with --resume, so it is exact.
+    /// None means the process began a fresh session and its id is not recoverable from /proc;
+    /// the UI asks which transcript it is rather than guessing on the user's behalf.
+    pub session_id: Option<String>,
+    pub title: Option<String>,
+}
+
+/// `--resume <uuid>` or `-r <uuid>` in a process's argv.
+fn session_id_from_argv(cmd: &str) -> Option<String> {
+    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    let at = parts.iter().position(|p| *p == "--resume" || *p == "-r")?;
+    let id = parts.get(at + 1)?;
+    let ok = id.len() >= 8 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    if ok {
+        Some((*id).to_string())
+    } else {
+        None
+    }
+}
+
+fn transcript_path(cwd: &str, session_id: &str) -> PathBuf {
+    home()
+        .join(".claude")
+        .join("projects")
+        .join(project_slug(cwd))
+        .join(format!("{}.jsonl", session_id))
+}
+
+/// Agent processes of this user that Athena does not already own, whether or not they are in
+/// tmux. Unlike list_adoptable_processes, which exists to feed reptyr, this one is about
+/// resuming, so a process under some other tmux server is still importable.
+#[tauri::command]
+pub fn list_running_agents() -> Vec<RunningAgent> {
+    let uid = our_uid();
+    let ours: Vec<i32> = pane_map()
+        .iter()
+        .filter(|(sess, _)| sess.starts_with("athena_"))
+        .map(|(_, pid)| *pid)
+        .collect();
+    let mut out = Vec::new();
+    let Ok(rd) = fs::read_dir("/proc") else { return out };
+    for e in rd.flatten() {
+        let Ok(pid) = e.file_name().to_string_lossy().parse::<i32>() else { continue };
+        if pid <= 1 || uid_of(pid) != Some(uid) {
+            continue;
+        }
+        let Some(cmd) = cmdline_of(pid) else { continue };
+        let leaf = cmd
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .rsplit('/')
+            .next()
+            .unwrap_or("");
+        if leaf != "claude" && leaf != "codex" {
+            continue;
+        }
+        if under_tmux(pid, &ours) {
+            continue; // Athena already owns this one
+        }
+        let cwd = fs::read_link(format!("/proc/{}/cwd", pid))
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let session_id = session_id_from_argv(&cmd);
+        let title = session_id
+            .as_ref()
+            .and_then(|sid| first_user_text(&transcript_path(&cwd, sid)));
+        out.push(RunningAgent { pid, cmd: cmd.chars().take(120).collect(), cwd, session_id, title });
+    }
+    out.sort_by_key(|a| a.pid);
+    out
+}
+
+/// Ask a process to exit and wait briefly for it to actually go.
+fn terminate_and_wait(pid: i32) -> bool {
+    if Command::new("kill").args(["-TERM", &pid.to_string()]).status().is_err() {
+        return false;
+    }
+    for _ in 0..30 {
+        if !PathBuf::from(format!("/proc/{}", pid)).exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
+/// Import a running agent: stop it, then resume its session inside a new tile.
+#[tauri::command]
+pub fn import_agent(
+    pid: i32,
+    session_id: String,
+    cwd: String,
+    name: String,
+) -> Result<InstanceView, String> {
+    if pid <= 1 {
+        return Err("refusing to act on pid 1 or lower".into());
+    }
+    if uid_of(pid) != Some(our_uid()) {
+        return Err("that process is not yours, or it has already exited".into());
+    }
+    if session_id.trim().is_empty() {
+        return Err("no session was chosen for that process".into());
+    }
+    // The id becomes a command-line argument, so it is checked rather than trusted.
+    if !session_id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') || session_id.len() < 8 {
+        return Err(format!("not a session id: {}", session_id));
+    }
+    let path = transcript_path(&cwd, &session_id);
+    if !path.is_file() {
+        return Err(format!("no transcript for that session at {}", path.display()));
+    }
+
+    let stopped = terminate_and_wait(pid);
+    let view = crate::registry::launch_in(
+        cwd,
+        format!("claude --resume {}", session_id),
+        name,
+        None,
+    )?;
+    if !stopped {
+        // The tile is up and usable, so this is a warning rather than a failure, but the user
+        // has to know two processes may now be appending to one transcript.
+        eprintln!("athena: pid {} did not exit; close that terminal to avoid two writers", pid);
+    }
+    Ok(view)
 }

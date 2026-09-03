@@ -41,6 +41,8 @@ fn main() {
             adopt::list_adoptable_processes,
             adopt::reptyr_check,
             adopt::adopt_process,
+            adopt::list_running_agents,
+            adopt::import_agent,
             sessions::past_sessions,
             sessions::resume_session,
             lanes::codex_tasks,

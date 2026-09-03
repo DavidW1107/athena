@@ -734,3 +734,15 @@ tabs are `flex: 0 1 auto` with `min-width: 0`, so they shrink and ellipsize befo
 scrolls. A visible scrollbar in a short strip sat on top of the tabs and swallowed the click.
 
 Chrome heights: header 26px, tile header 22px min, grid gap and padding 6px.
+
+## v1.6 importing running agents
+
+`adopt.rs` gains two commands:
+
+| Command | Signature | Notes |
+|---|---|---|
+| `list_running_agents` | `() -> Vec<RunningAgent>` | This user's claude/codex processes not already under an `athena_` tmux pane. `session_id` is `Some` only when argv carries `--resume <id>`; it is never inferred. |
+| `import_agent` | `(pid, session_id, cwd, name) -> Result<InstanceView, String>` | Validates pid ownership and that the session id is hex-and-dashes and has a transcript on disk, SIGTERMs the process and waits up to 3s, THEN calls `launch_in(.., None)`. |
+
+The terminate-before-launch ordering is load bearing. Reversing it allows a window where two
+processes append to one transcript, which is the thing the feature exists to avoid.

@@ -87,6 +87,13 @@ export const reptyrCheck = () => invoke('reptyr_check');
 /** Move a live process onto a new pty inside a fresh Athena session. */
 export const adoptProcess = (pid, name) => invoke('adopt_process', { pid, name });
 
+/** Agent processes of this user that Athena does not already own, importable by resume. */
+export const listRunningAgents = () => invoke('list_running_agents');
+
+/** Stop a running agent and resume its session inside a new tile. */
+export const importAgent = (pid, sessionId, cwd, name) =>
+  invoke('import_agent', { pid, sessionId, cwd, name });
+
 // ------------------------------------------------------------------ resume browser
 
 /** Past Claude sessions recorded for that cwd, newest first, capped at 40. */

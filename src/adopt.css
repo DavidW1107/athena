@@ -83,3 +83,16 @@
   margin: 0;
   padding: 0;
 }
+
+/* Session picker for a process whose id is not in its argv. */
+.adopt-pick {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+  padding: 3px 6px;
+  font: 11px var(--mono);
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}

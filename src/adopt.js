@@ -5,7 +5,16 @@
 // bare process has to be moved with reptyr, which needs ptrace permission and can kill the
 // process it is moving, so that half stays behind a preflight banner and says what it costs.
 
-import { adoptProcess, adoptSession, listAdoptableProcesses, listAdoptableSessions, reptyrCheck } from './api.js';
+import {
+  adoptProcess,
+  adoptSession,
+  importAgent,
+  listAdoptableProcesses,
+  listAdoptableSessions,
+  listRunningAgents,
+  pastSessions,
+  reptyrCheck,
+} from './api.js';
 import * as store from './store.js';
 import './adopt.css';
 
@@ -39,13 +48,13 @@ export function mountAdopt({ dialog, openBtn, onAdopted }) {
 
   let busy = false;
 
-  async function adopt(run, label) {
+  async function adopt(run, label, closeAfter = true) {
     if (busy) return;
     busy = true;
     try {
       const view = await run();
       await store.refresh();
-      dialog.close();
+      if (closeAfter) dialog.close();
       onAdopted?.(view.id);
     } catch (err) {
       // The backend's message is the useful one here (a vanished session, a refused
@@ -76,9 +85,77 @@ export function mountAdopt({ dialog, openBtn, onAdopted }) {
     return s;
   }
 
+  /** A picker of recent transcripts, for a process whose session id is not in its argv. */
+  async function sessionPicker(cwd) {
+    const sel = document.createElement('select');
+    sel.className = 'adopt-pick';
+    sel.append(Object.assign(document.createElement('option'), { value: '', textContent: 'pick a session' }));
+    for (const s of await pastSessions(cwd)) {
+      sel.append(
+        Object.assign(document.createElement('option'), {
+          value: s.session_id,
+          textContent: `${new Date(s.mtime * 1000).toLocaleString()}  ${s.title}`,
+        })
+      );
+    }
+    return sel;
+  }
+
   async function render() {
-    const [sessions, check] = await Promise.all([listAdoptableSessions(), reptyrCheck()]);
+    const [running, sessions, check] = await Promise.all([
+      listRunningAgents(),
+      listAdoptableSessions(),
+      reptyrCheck(),
+    ]);
     body.replaceChildren();
+
+    // First, because on this machine it is the common case: agents running in ordinary
+    // terminal windows, outside tmux, which can only be brought in by resuming them.
+    const runSection = section(
+      'running agents',
+      'Athena stops the process and resumes its session in a tile. The conversation carries on from its transcript; anything mid-turn is lost. Stopping happens first, so two processes never append to one transcript.'
+    );
+    if (!running.length) {
+      runSection.appendChild(el('p', 'adopt-empty', 'No agent processes of yours are running outside Athena.'));
+    }
+    const exact = running.filter((r) => r.session_id);
+    if (exact.length > 1) {
+      const all = el('button', 'primary', `import all ${exact.length}`);
+      all.type = 'button';
+      all.onclick = async () => {
+        for (const r of exact) {
+          // Sequential on purpose: each one stops a process and starts a tmux session.
+          // eslint-disable-next-line no-await-in-loop
+          await adopt(() => importAgent(r.pid, r.session_id, r.cwd, r.title || ''), `pid ${r.pid}`, false);
+        }
+        dialog.close();
+      };
+      runSection.appendChild(all);
+    }
+    for (const r of running) {
+      const sub = `${r.cwd}${r.title ? ` and ${r.title}` : ''}`;
+      if (r.session_id) {
+        runSection.appendChild(
+          row(`pid ${r.pid}  ${r.session_id.slice(0, 8)}`, sub, 'import', () =>
+            adopt(() => importAgent(r.pid, r.session_id, r.cwd, r.title || ''), `pid ${r.pid}`)
+          )
+        );
+      } else {
+        // Started fresh, so its id is not in argv and nothing in /proc reveals it. Ask
+        // rather than guess: a wrong guess resumes somebody else's conversation.
+        const rowEl = row(`pid ${r.pid}`, `${r.cwd}  (started fresh, choose its session)`, 'import', () => {}, true);
+        const pick = await sessionPicker(r.cwd);
+        const btn = rowEl.querySelector('button');
+        pick.onchange = () => {
+          btn.disabled = !pick.value;
+        };
+        btn.onclick = () =>
+          adopt(() => importAgent(r.pid, pick.value, r.cwd, pick.selectedOptions[0]?.textContent || ''), `pid ${r.pid}`);
+        rowEl.querySelector('.adopt-text').appendChild(pick);
+        runSection.appendChild(rowEl);
+      }
+    }
+    body.appendChild(runSection);
 
     const tmuxSection = section(
       'tmux sessions',

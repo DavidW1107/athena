@@ -72,6 +72,17 @@ An adopted agent was already running when Athena arrived, so its environment can
 in and taking the id from the session name. That is why an adopted instance reports state exactly
 like a launched one.
 
+**Import a running agent.** The common case on this machine is a dozen claudes in ordinary
+terminal windows, none under tmux. Those cannot be moved without ptrace, so the adopt dialog's
+first section does the other thing that reaches the same place: it reads the session id out of the
+process's own argv (`claude --resume <id>`), stops the process, and starts `claude --resume <id>`
+inside a tile. The conversation carries on from its transcript; only a turn in flight is lost.
+
+Stopping happens **before** the resume, never after, because two live processes appending to one
+transcript is exactly the corruption this is guarding against. A process started fresh has no id in
+its argv and nothing in `/proc` reveals it, so Athena asks which transcript it is instead of
+guessing: a wrong guess would resume somebody else's conversation.
+
 **Adopt a bare process.** An agent running outside tmux can only be moved with `reptyr`, which
 ptrace-attaches to the live process and relocates it onto a new pty. It needs
 `kernel.yama.ptrace_scope` at 0, or `cap_sys_ptrace` granted to the reptyr binary alone, which is
