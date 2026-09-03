@@ -125,3 +125,9 @@ WCAG AA on `#1E1E1E`. That palette file also carries a `[Light]` section
 That copies the binary to `~/.local/bin/athena`, installs the icon, and writes
 `~/.local/share/applications/athena.desktop`. Nothing needs root. Athena is then searchable by
 name from the desktop and pinnable to the dock. Re-run the script after each release build.
+
+## Credits
+
+The application icon is "Spartan helmet" by Delapouite from game-icons.net, used under CC BY 3.0,
+which requires attribution. Full details, and the provenance of the colour palette, are in
+[CREDITS.md](CREDITS.md).
