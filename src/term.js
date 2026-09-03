@@ -10,29 +10,29 @@ import { onPty, ptyAttach, ptyDetach, ptyResize, ptyWrite } from './api.js';
 
 // Kept in step with the tokens in style.css. xterm needs literal colours (it paints to a
 // canvas and cannot read a CSS custom property), so this is the one place a hex is allowed.
-// The ANSI set is the VS Code dark palette, which is the profile the user's terminal runs,
-// so a Claude Code TUI renders here exactly as it does next door.
+// The ANSI set starts from the VS Code dark palette his terminal runs, pushed brighter and
+// more saturated to sit on this lighter ground without going muddy.
 const THEME = {
-  background: '#1c1b1a',
-  foreground: '#eae6df',
-  cursor: '#f0b24a',
-  cursorAccent: '#1c1b1a',
-  selectionBackground: 'rgba(138, 180, 216, 0.30)',
-  black: '#1c1b1a',
-  red: '#f14c4c',
-  green: '#23d18b',
-  yellow: '#f5f543',
-  blue: '#3b8eea',
-  magenta: '#d670d6',
-  cyan: '#29b8db',
+  background: '#26221f',
+  foreground: '#f5f1ea',
+  cursor: '#ffb224',
+  cursorAccent: '#26221f',
+  selectionBackground: 'rgba(90, 176, 255, 0.32)',
+  black: '#26221f',
+  red: '#ff5d55',
+  green: '#35d07f',
+  yellow: '#ffd53d',
+  blue: '#4da3ff',
+  magenta: '#e478e4',
+  cyan: '#2fd0f0',
   white: '#e5e5e5',
-  brightBlack: '#8d8880',
-  brightRed: '#f14c4c',
-  brightGreen: '#23d18b',
-  brightYellow: '#f5f543',
-  brightBlue: '#3b8eea',
-  brightMagenta: '#d670d6',
-  brightCyan: '#29b8db',
+  brightBlack: '#9b948a',
+  brightRed: '#ff7b73',
+  brightGreen: '#5ce49b',
+  brightYellow: '#ffe66b',
+  brightBlue: '#7cbcff',
+  brightMagenta: '#f29bf2',
+  brightCyan: '#6ee0f7',
   brightWhite: '#ffffff',
 };
 

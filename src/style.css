@@ -1,25 +1,27 @@
 :root {
-  /* Surfaces. Measured against the terminal this app sits beside: Ptyxis on the VS Code
-     dark palette, which grounds around #1e1e1e rather than near-black. Athena keeps a warm
-     cast so it is not a second VS Code, but it sits at the same brightness. */
-  --bg: #1c1b1a;
-  --panel: #232120;
-  --panel-2: #2b2827;
-  --hover: rgba(255, 255, 255, 0.07);
-  --line: rgba(255, 255, 255, 0.11);
-  --line-strong: rgba(255, 255, 255, 0.22);
+  /* Surfaces sit ABOVE the terminal beside them: Ptyxis on the VS Code palette grounds near
+     #1e1e1e, so Athena at #26221f reads as lit rather than as another black window. Warm cast
+     throughout so it is not a second VS Code. */
+  --bg: #26221f;
+  --panel: #2f2b27;
+  --panel-2: #3a3531;
+  --hover: rgba(255, 255, 255, 0.09);
+  --line: rgba(255, 255, 255, 0.14);
+  --line-strong: rgba(255, 255, 255, 0.30);
 
-  /* Text. --dim is 7:1 on --bg, so secondary text is still AA at small sizes. */
-  --ink: #eae6df;
-  --dim: #a49e95;
+  /* Text. --dim holds 7:1 on --bg, so secondary text is AA at small sizes. */
+  --ink: #f5f1ea;
+  --dim: #b8b1a6;
 
-  /* State. One rationed accent: --needs is the needs-you signal and nothing else uses it. */
-  --working: #6bbf7b;
-  --needs: #f0b24a;
-  --idle: #8d8880;
-  --dead: #e0645a;
-  --paused: #6f9fd0;
-  --accent: #8ab4d8;
+  /* State. Saturated on purpose: these are read at a glance across a full screen of tiles,
+     from a 7px dot, so chroma is doing the work rather than a label. --needs stays the one
+     rationed accent and marks nothing except an instance waiting on you. */
+  --working: #35d07f;
+  --needs: #ffb224;
+  --idle: #9b948a;
+  --dead: #ff5d55;
+  --paused: #4da3ff;
+  --accent: #5ab0ff;
 
   --mono: "Ubuntu Sans Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
@@ -81,11 +83,13 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   flex-wrap: wrap;
   gap: 8px;
   padding: 8px 14px;
-  background: rgba(224, 160, 60, 0.12);
-  border-bottom: 1px solid rgba(224, 160, 60, 0.3);
+  background: rgba(255, 178, 36, 0.14);
+  background: color-mix(in srgb, var(--needs) 14%, transparent);
+  border-bottom: 1px solid rgba(255, 178, 36, 0.34);
+  border-bottom: 1px solid color-mix(in srgb, var(--needs) 34%, transparent);
 }
 .attention b { color: var(--needs); font-family: var(--mono); font-size: 11px; }
-.attention button { border-color: rgba(224, 160, 60, 0.45); }
+.attention button { border-color: rgba(255, 178, 36, 0.45); border-color: color-mix(in srgb, var(--needs) 45%, transparent); }
 
 /* The shell is a flex column, so any block between the header and main (broadcast today,
    anything later) takes its own height and main keeps the remainder. Sizing main at
@@ -181,12 +185,18 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
 
 /* Dialog panels: the Resume browser, the Codex lane and handoff, which used to live in a
    permanent sidebar and now cost nothing until opened. */
+/* Only ever set `display` on an OPEN dialog. The UA stylesheet hides a closed one with
+   `dialog:not([open]) { display: none }`, and a plain `.panel { display: flex }` outranks it,
+   which leaves the panel painted forever and makes close() look like it did nothing. */
 .panel {
   width: min(760px, 92vw);
   max-height: 80vh;
+  padding: 16px;
+}
+
+.panel[open] {
   display: flex;
   flex-direction: column;
-  padding: 16px;
 }
 
 .panel-title {
