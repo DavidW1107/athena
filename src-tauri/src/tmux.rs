@@ -138,6 +138,12 @@ pub fn send_block(sess: &str, tag: &str, text: &str) -> Result<(), String> {
 /// before new-session; raising it later does not affect panes that already exist.
 pub fn ensure_server_options() {
     let _ = tmux(&["set-option", "-g", "history-limit", "50000"]);
+    // tmux draws its own status line at the bottom of every pane: green, session name left,
+    // window name and date right. Inside a tile that reads as a coloured bar under the
+    // terminal, and it was also what smeared down the screen when copy mode was thrashing,
+    // because it is repainted on every mode change. Athena's own header already carries the
+    // session name and state, so the status line is duplicate chrome costing a row per pane.
+    let _ = tmux(&["set-option", "-g", "status", "off"]);
     // The pane follows the attached client's size, which is how a tile going fullscreen turns
     // into a SIGWINCH and a redraw at the new width. Without it a pane can stay pinned to the
     // size it was created at and the text never reflows.

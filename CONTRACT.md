@@ -938,3 +938,21 @@ edge. Matching `--bg` makes it invisible.
 class that sets `display: flex`. Third instance of this bug in this codebase (`.panel`,
 `.cost-host`, now `.tile-msg`): any rule setting `display` on an element that is toggled with the
 `hidden` attribute needs the guard.
+
+## v1.17 the green bar was tmux
+
+Identified from a screenshot after three wrong guesses from code alone. The bar at the bottom of
+every tile was **tmux's own status line**: default green, `session:window*` on the left, window
+name and date on the right. It was never Athena chrome, which is why grepping the CSS for a green
+bar found nothing.
+
+`ensure_server_options` now sets `status off`. Athena's tile header already shows the session name
+and state, so the status line was duplicate chrome costing one row per pane.
+
+It was also the second symptom: the "same line filling the screen" was that status line being
+repainted on every copy-mode entry and exit while a downward scroll at the bottom thrashed the
+mode. Both symptoms, one cause.
+
+Lesson worth keeping: three rounds were lost looking for a green element in the stylesheet for
+something the terminal multiplexer was drawing. When a visual artefact cannot be found in the
+code, get a screenshot before theorising again.
