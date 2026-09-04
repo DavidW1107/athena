@@ -6,7 +6,9 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 
-import { onPty, ptyAttach, ptyDetach, ptyResize, ptyWrite } from './api.js';
+import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
+
+import { onPty, primaryRead, primaryWrite, ptyAttach, ptyDetach, ptyResize, ptyWrite } from './api.js';
 
 // Kept in step with the tokens in style.css. xterm needs literal colours (it paints to a
 // canvas and cannot read a CSS custom property), so this is the one place a hex is allowed.
@@ -78,6 +80,88 @@ export function createTerm(mountEl, opts = {}) {
   let disposed = false;
 
   term.onData((d) => attachedId && ptyWrite(attachedId, d));
+
+  // Ctrl+Shift+C / Ctrl+Shift+V, the way every Linux terminal binds them. Plain Ctrl+C has
+  // to stay SIGINT, which is the whole reason the shifted pair exists.
+  //
+  // The system clipboard goes through the Tauri plugin rather than navigator.clipboard: on
+  // Linux the webview is WebKitGTK, where the async clipboard READ sits behind a permission
+  // request Tauri never answers, so navigator.clipboard.readText() rejects and paste silently
+  // does nothing. The plugin reads it in Rust, where there is no permission gate.
+  //
+  // Returning false tells xterm to swallow the key, but xterm returns early WITHOUT calling
+  // preventDefault, so the browser's own binding still fires. That matters for exactly one
+  // key: WebKitGTK maps Ctrl+Shift+V to paste-as-plain-text, xterm's input textarea is
+  // editable, and its native paste handler would then deliver the same text a second time.
+  // preventDefault here is what makes the plugin the only path.
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown' || !e.ctrlKey || !e.shiftKey || e.altKey) return true;
+    const k = e.key.toLowerCase();
+    if (k !== 'c' && k !== 'v') return true;
+    e.preventDefault();
+    if (k === 'c') {
+      // No selection means no copy, and the key is still swallowed rather than reaching the
+      // agent as a stray control code. Matches GNOME Terminal.
+      const sel = term.getSelection();
+      if (sel) writeText(sel).catch((err) => console.error('[athena] copy', err));
+    } else {
+      // term.paste, not ptyWrite: it wraps the text in bracketed-paste markers when the
+      // program asked for them, which is what stops a multi-line paste from being run line
+      // by line by a shell, and what makes an agent TUI read it as one prompt.
+      readText()
+        .then((txt) => txt && term.paste(txt))
+        .catch((err) => console.error('[athena] paste', err));
+    }
+    return false;
+  });
+
+  // ---------------------------------------------------------------- the other clipboard
+
+  // Copy on select and middle-click paste: the pair of habits a Linux terminal gives you that
+  // have nothing to do with Ctrl+Shift. Both move the PRIMARY selection rather than the
+  // clipboard, which is what keeps them from ever touching what Ctrl+Shift+C put there.
+  //
+  // Neither can be left to the browser. xterm's own Linux support here only moves its hidden
+  // textarea under the pointer and hopes the engine does the rest, which is a Chromium
+  // behaviour; WebKitGTK is the engine in a Tauri window, and its rules for propagating a
+  // textarea selection to PRIMARY are not the ones a terminal needs. So both directions are
+  // explicit, and the browser's own attempt is suppressed to avoid pasting twice.
+
+  // Selecting with the mouse takes PRIMARY, exactly as dragging over text in any terminal does.
+  //
+  // On mouseup rather than onSelectionChange, which fires on every pixel of a drag and would be
+  // one IPC round trip per mouse move. The timeout is because xterm finishes the selection on a
+  // document-level mouseup that runs after this one has bubbled: without it the text read here
+  // is the selection as it stood one event ago.
+  mountEl.addEventListener('mouseup', () => {
+    setTimeout(() => {
+      if (disposed) return;
+      // A click that clears the selection leaves PRIMARY alone rather than blanking it. That is
+      // also what every terminal does: clicking away does not empty your middle-click buffer.
+      const sel = term.getSelection();
+      if (sel) primaryWrite(sel).catch((err) => console.error('[athena] primary', err));
+    }, 0);
+  });
+
+  // Middle click pastes PRIMARY.
+  //
+  // preventDefault on all three events because WebKit can act on any of them: mousedown for
+  // autoscroll, mouseup for its own global-selection paste, auxclick for what xterm binds.
+  // The paste itself hangs off mousedown so it happens the instant the button goes down.
+  for (const type of ['mousedown', 'mouseup', 'auxclick']) {
+    mountEl.addEventListener(type, (e) => {
+      if (e.button !== 1) return;
+      // A program that turned mouse reporting on wants the button itself, so it gets it, and
+      // shift is the override every terminal offers for exactly that case. Without the override
+      // middle-click paste would just quietly stop working inside anything using the mouse.
+      if (term.modes.mouseTrackingMode !== 'none' && !e.shiftKey) return;
+      e.preventDefault();
+      if (type !== 'mousedown') return;
+      primaryRead()
+        .then((txt) => txt && term.paste(txt))
+        .catch((err) => console.error('[athena] primary paste', err));
+    });
+  }
 
   /**
    * Re-measure AND tell the pty, which are two different things.

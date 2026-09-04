@@ -138,6 +138,18 @@ export const ptyDetach = (id) => invoke('pty_detach', { id });
 /** Subscribe to one instance's pty output. Resolves to an unlisten function. */
 export const onPty = (id, fn) => listen(`pty:${id}`, (e) => fn(e.payload));
 
+// ------------------------------------------------------------------ primary selection
+
+/**
+ * The X11 / Wayland PRIMARY selection, which is what a middle click pastes and what selecting
+ * text fills. Separate from the clipboard on purpose, so a selection never overwrites a copy.
+ * Resolves to '' when nothing is selected anywhere on the desktop.
+ */
+export const primaryRead = () => invoke('primary_read');
+
+/** Take ownership of the PRIMARY selection with this text. */
+export const primaryWrite = (text) => invoke('primary_write', { text });
+
 // ------------------------------------------------------------------ broadcast
 
 /**

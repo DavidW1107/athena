@@ -155,6 +155,31 @@ the layout is computed.
 ctrl-plus, ctrl-minus and ctrl-0 to reset. Both the span and the font size are remembered per tile
 alongside the tile order, in `localStorage`.
 
+**Clipboard.** Ctrl+Shift+C copies the terminal's selection, Ctrl+Shift+V pastes, the same
+binding every Linux terminal uses and for the same reason: plain Ctrl+C has to stay SIGINT. The
+paste goes through xterm, so it arrives inside bracketed-paste markers when the program asked for
+them, and a multi-line paste reaches an agent as one prompt instead of being run line by line.
+System clipboard access is the Tauri clipboard plugin rather than `navigator.clipboard`, because
+on WebKitGTK the async clipboard read sits behind a permission request Tauri never answers.
+
+**Copy on select, middle-click paste.** Dragging over terminal text takes the PRIMARY
+selection and a middle click pastes it, the other half of how a Linux terminal handles text.
+PRIMARY is a separate buffer from the clipboard, which is the point: selecting never overwrites
+what Ctrl+Shift+C put there. A program that has turned mouse reporting on gets the middle button
+itself; shift-middle-click overrides that, as everywhere else. Neither direction can be left to
+the browser, since xterm's Linux path assumes Chromium's rules for a hidden textarea and the
+engine here is WebKitGTK, so both go through `src-tauri/src/clipboard.rs` and arboard. That file
+carries an ignored test that round-trips PRIMARY against the real desktop:
+
+    cd src-tauri && cargo test -- --ignored
+
+**Dropping files in.** Drag files or folders from the file manager onto a tile and their paths are
+typed into that terminal at the cursor, shell-quoted, space separated, nothing submitted. Drop onto
+a text field instead, the launcher's directory box or the broadcast and handoff boxes, and the paths
+are inserted there. Tauri owns the webview's native drag destination, so these arrive on the webview
+event channel with paths already resolved rather than as an HTML5 `drop`; the tile and tab
+reordering drags are page-internal and unaffected.
+
 **Desktop launcher.**
 
     npm run tauri build -- --no-bundle

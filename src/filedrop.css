@@ -1,0 +1,15 @@
+/* The one thing a native file drag has that an in-page one does not: no browser drag image
+   follows the pointer, so without a highlight there is nothing at all telling you which tile
+   is about to receive the paths. Deliberately the same outline `.tile.over` uses for an
+   in-page drag, because it means the same thing. */
+
+.tile.drop-hot {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+input.drop-hot,
+textarea.drop-hot {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}

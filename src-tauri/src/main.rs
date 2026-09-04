@@ -11,6 +11,7 @@
 mod adopt;
 mod autopause;
 mod broadcast;
+mod clipboard;
 mod cost;
 mod handoff;
 mod lanes;
@@ -20,6 +21,7 @@ mod sessions;
 mod tmux;
 mod util;
 
+use clipboard::Primary;
 use pty::PtyStore;
 
 fn main() {
@@ -27,7 +29,9 @@ fn main() {
     tmux::ensure_server_options();
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(PtyStore::default())
+        .manage(Primary::default())
         .invoke_handler(tauri::generate_handler![
             registry::list_instances,
             registry::launch_in,
@@ -63,7 +67,9 @@ fn main() {
             pty::attach,
             pty::pty_write,
             pty::pty_resize,
-            pty::pty_detach
+            pty::pty_detach,
+            clipboard::primary_read,
+            clipboard::primary_write
         ])
         .run(tauri::generate_context!())
         .expect("athena failed to start");

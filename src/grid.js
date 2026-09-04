@@ -8,7 +8,7 @@
 // That is also what makes "as many as I open" affordable: N groups means N ptys, not N
 // instances. The grid never shrinks a tile below a readable width; it scrolls instead.
 
-import { closeInstance, endScroll, restore, setGroup, setPaused, stateLabel, tmuxScroll } from './api.js';
+import { closeInstance, endScroll, ptyWrite, restore, setGroup, setPaused, stateLabel, tmuxScroll } from './api.js';
 import * as store from './store.js';
 import { createTerm } from './term.js';
 import { MIME_INSTANCE, MIME_TILE, dragPayload, isDroppable } from './dnd.js';
@@ -87,7 +87,8 @@ function writeOrder(order) {
  *
  * @param {HTMLElement} host
  * @param {{ term?: object }} [opts]
- * @returns {{ destroy: () => Promise<void>, focusGroup: (group: string) => void }}
+ * @returns {{ destroy: () => Promise<void>, focusGroup: (group: string) => void,
+ *   insertText: (group: string, text: string) => void }}
  */
 export function mountGrid(host, opts = {}) {
   /** @type {Map<string, any>} */
@@ -577,6 +578,20 @@ export function mountGrid(host, opts = {}) {
     );
   }
 
+  /**
+   * Type text into a tile's live terminal, exactly as if it had been typed at the keyboard.
+   * Used by the file drop, so a dropped path lands at the cursor and nothing is submitted.
+   *
+   * The pane is taken out of copy mode first: a scrolled pane routes keystrokes to tmux's
+   * scroller, so the paths would drive the scrollback instead of reaching the agent.
+   */
+  function insertText(group, text) {
+    const tile = tiles.get(group);
+    if (!tile?.activeId || !text) return;
+    clearScrolled(tile);
+    ptyWrite(tile.activeId, text);
+  }
+
   function focusTile(group) {
     const tile = tiles.get(group);
     if (!tile) return;
@@ -721,6 +736,7 @@ export function mountGrid(host, opts = {}) {
 
   return {
     focusGroup: focusTile,
+    insertText,
     toggleZoom,
     zoom: bumpFont,
     resetZoom: resetFont,

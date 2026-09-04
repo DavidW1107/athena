@@ -17,6 +17,7 @@ import { mountAdopt } from './adopt.js';
 import { mountAutopause } from './autopause.js';
 import { mountBroadcast } from './broadcast.js';
 import { mountCost } from './cost.js';
+import { mountFileDrop } from './filedrop.js';
 import { mountHandoff } from './handoff.js';
 
 const $ = (s) => document.querySelector(s);
@@ -28,6 +29,16 @@ let launcher = null;
 
 const grid = mountGrid($('#grid-host'), {
   onNewInTile: ({ group, cwd, cmd }) => launcher?.open({ group, cwd, cmd }),
+});
+
+// Files dragged in from the file manager. A tile gets the paths typed into its terminal at
+// the cursor, nothing submitted, the way a terminal emulator handles a drop; a text field
+// (the launcher's directory box, the broadcast and handoff boxes) gets them inserted instead.
+mountFileDrop({
+  onTerminal: (group, text) => {
+    grid.focusGroup(group);
+    grid.insertText(group, text);
+  },
 });
 
 /** Bring an instance into view by focusing the tile its group owns. */
