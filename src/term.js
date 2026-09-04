@@ -48,7 +48,8 @@ const THEME = {
  *   await t.dispose();          // detach + tear down the xterm; handle is dead after
  *
  * @param {HTMLElement} mountEl
- * @param {{ fontSize?: number, scrollback?: number, theme?: object, fontFamily?: string }} [opts]
+ * @param {{ fontSize?: number, scrollback?: number, theme?: object, fontFamily?: string,
+ *   onResize?: (cols: number, rows: number) => void }} [opts]
  * @returns {{
  *   attach: (id: string) => Promise<boolean>,
  *   detach: () => Promise<void>,
@@ -90,6 +91,10 @@ export function createTerm(mountEl, opts = {}) {
     if (disposed) return;
     safeFit();
     if (attachedId) ptyResize(attachedId, term.cols, term.rows);
+    // The owner gets told the new character grid, which is what lets a caller react to a
+    // pane that has become too narrow. Called after the pty resize so the number reported
+    // is the one the agent will actually be drawing into.
+    opts.onResize?.(term.cols, term.rows);
   }
 
   const ro = new ResizeObserver(() => {

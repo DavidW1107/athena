@@ -839,3 +839,22 @@ each header so this class of question is answerable by looking.
 State is on the tile border via `data-state` on the tile root, with the per-tab dots kept so a
 background tab's state is still visible. Focus thickens the border rather than recolouring it,
 which would otherwise spend the state signal on something that is not state.
+
+## v1.12 minimum column width
+
+Claude Code wraps what it prints at the pane width AT PRINT TIME, using real newlines, so a
+conversation held in a narrow tile is narrow forever; no terminal can un-wrap a hard break. Tile
+width therefore permanently sets the width of everything written while you work in it.
+
+`autoFont(tile)` keeps a pane at `MIN_COLS = 100` by stepping the type down, and lets it grow back
+to `DEFAULT_FONT` when there is room. Character width scales with font size, so the target size is
+a ratio (`size * cols / MIN_COLS`) rather than a search: it settles in one or two passes, rounded
+to half points. It runs from `createTerm`'s new `onResize` callback, which fires after the pty
+resize, and is reentrancy-guarded by `tile.autoBusy`.
+
+It is skipped entirely once `fonts[group]` is set, because overriding a deliberate ctrl-wheel
+choice is worse than a narrow pane. Ctrl-0 clears the manual size and hands the tile back to it.
+
+Settled sizes: 1 tile 254 cols at 12.5px, 2 tiles 126 at 12.5px, 3 tiles 100 at 10.5px, 4 tiles 98
+at the 8px floor. The header readout shows `cols x rows` plus `@px` whenever the size is not the
+default, so a shrunken tile says so.

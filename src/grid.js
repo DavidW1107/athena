@@ -24,6 +24,13 @@ const MIN_FONT = 8;
 const MAX_FONT = 24;
 const DEFAULT_FONT = 12.5;
 
+// Anything Claude Code prints is wrapped at the pane width AT THE TIME IT IS PRINTED, with real
+// newlines, so a conversation held in a narrow tile stays narrow forever: no terminal can
+// un-wrap a hard break. Rather than let a small tile permanently record 61-column output, the
+// font steps down until the pane is at least this wide.
+// ponytail: a constant. Make it a setting if 100 ever turns out to be the wrong number.
+const MIN_COLS = 100;
+
 /** Small keyed maps of per-tile preferences, all failing soft to an empty object. */
 function readMap(key) {
   try {
@@ -335,7 +342,11 @@ export function mountGrid(host, opts = {}) {
         return;
       }
       if (!tile.term) {
-        tile.term = createTerm(tile.termHost, { ...opts.term, fontSize: fontFor(tile.group) });
+        tile.term = createTerm(tile.termHost, {
+          ...opts.term,
+          fontSize: fontFor(tile.group),
+          onResize: () => autoFont(tile),
+        });
       }
       let ok = false;
       let why = 'attach failed';
@@ -347,7 +358,7 @@ export function mountGrid(host, opts = {}) {
       if (tile.gen !== gen) return; // the user switched tab while this was attaching
       if (ok) {
         tile.term.fit();
-        tile.size.textContent = `${tile.term.term.cols}x${tile.term.term.rows}`;
+        showSize(tile);
       } else {
         showMessage(tile, `athena: ${why}`);
       }
@@ -404,6 +415,47 @@ export function mountGrid(host, opts = {}) {
     return Number.isFinite(n) ? clamp(n, MIN_FONT, MAX_FONT) : DEFAULT_FONT;
   }
 
+  /**
+   * Keep a tile at MIN_COLS by shrinking its type, and let it grow back when there is room.
+   *
+   * Skipped entirely once the user has set a size by hand for that tile: an automatic
+   * override of a deliberate choice is worse than a narrow pane. Ctrl-0 clears the manual
+   * size and hands the tile back to this.
+   */
+  function autoFont(tile) {
+    if (!tile?.term || tile.autoBusy) return;
+    if (fonts[tile.group] !== undefined) return; // set by hand, leave it alone
+    tile.autoBusy = true;
+    try {
+      // Character width scales with font size, so the size that yields MIN_COLS is a ratio
+      // rather than a search. Three passes is ample; rounding to half points keeps it stable.
+      for (let pass = 0; pass < 3; pass++) {
+        const cols = tile.term.term.cols;
+        const size = tile.term.term.options.fontSize;
+        if (!cols) break;
+        if (cols >= MIN_COLS && size >= DEFAULT_FONT) break;
+        const want = clamp(Math.round(size * (cols / MIN_COLS) * 2) / 2, MIN_FONT, DEFAULT_FONT);
+        if (Math.abs(want - size) < 0.25) break;
+        tile.term.term.options.fontSize = want;
+        tile.term.fit();
+      }
+    } finally {
+      tile.autoBusy = false;
+    }
+    showSize(tile);
+  }
+
+  /** Live character grid, plus the type size when it is not the default. */
+  function showSize(tile) {
+    if (!tile.term) {
+      tile.size.textContent = '';
+      return;
+    }
+    const t = tile.term.term;
+    const px = t.options.fontSize;
+    tile.size.textContent = `${t.cols}x${t.rows}${px !== DEFAULT_FONT ? ` @${px}` : ''}`;
+  }
+
   function bumpFont(group, step) {
     const tile = tiles.get(group);
     if (!tile) return;
@@ -414,6 +466,7 @@ export function mountGrid(host, opts = {}) {
     if (tile.term) {
       tile.term.term.options.fontSize = next;
       tile.term.fit();
+      showSize(tile);
     }
   }
 
@@ -424,6 +477,7 @@ export function mountGrid(host, opts = {}) {
     if (tile?.term) {
       tile.term.term.options.fontSize = DEFAULT_FONT;
       tile.term.fit();
+      autoFont(tile); // back under automatic control
     }
   }
 
@@ -452,7 +506,7 @@ export function mountGrid(host, opts = {}) {
       requestAnimationFrame(() => {
         for (const t of tiles.values()) {
           t.term?.fit();
-          if (t.term) t.size.textContent = `${t.term.term.cols}x${t.term.term.rows}`;
+          if (t.term) showSize(t);
         }
       })
     );
@@ -536,7 +590,7 @@ export function mountGrid(host, opts = {}) {
     // The tile's own border carries the active instance's state, so a full screen of tiles
     // reads at a glance without hunting for a dot.
     tile.root.dataset.state = active ? active.state : 'empty';
-    tile.size.textContent = tile.term ? `${tile.term.term.cols}x${tile.term.term.rows}` : '';
+    showSize(tile);
 
     // Body: a live instance shows its terminal, anything else says why it does not.
     if (active && active.alive) {

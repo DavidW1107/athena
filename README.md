@@ -139,6 +139,12 @@ Code is read as "cycle through past messages", which is not scrolling. Double cl
 window with it, header included, and again to put it back. The terminal re-measures and resizes
 its pty, so the agent redraws at the new width rather than keeping the old character grid.
 
+**Minimum width.** Claude Code wraps its output at the pane width at the moment it prints, with
+real newlines, so a conversation held in a narrow tile stays narrow forever. Athena therefore keeps
+every pane at least 100 columns by stepping the type size down, and back up when there is room. A
+size you set yourself with ctrl and the wheel always wins; ctrl-0 hands the tile back to automatic.
+The header shows the live `cols x rows`, plus `@px` when the type is not at its default.
+
 **Resize and zoom.** Drag a tile's bottom-right grip to resize it, snapping to whole grid cells so
 the grid stays gapless: a free pixel size would take the tile out of its track and leave holes
 around it. Ctrl and the wheel over a terminal changes that terminal's font size only, as do
