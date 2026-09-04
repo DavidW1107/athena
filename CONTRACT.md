@@ -821,3 +821,21 @@ Verified with a real pty holding the tty as its controlling terminal: client 80x
 the pane 80 to 200 and the running program re-rendered at `width=200`. A test that calls `setsid`
 without `TIOCSCTTY` will show no resize at all, because there is no foreground process group to
 signal; that is a broken test, not a broken chain.
+
+## v1.11 the tiles were never getting wider
+
+`grid-template-columns` used `repeat(auto-fill, minmax(460px, 1fr))`. auto-fill creates as many
+tracks as the row can hold and KEEPS the empty ones, so with two tiles on a maximised 1920 window
+each tile was 1fr of one of four tracks: 472px, about 61 columns, whatever else changed. Measured
+on the user's machine as 64x72 and 67x52 panes.
+
+It is `auto-fit` now, which collapses empty tracks so the tiles that exist share the full width:
+one tile 1908px (~247 cols), two 951px (~123), three 632px (~82), four unchanged at 472px.
+
+This was mistaken twice for a resize-plumbing bug. The plumbing was fine from v1.10 on; the pane
+faithfully matched a tile that was never growing. `.tile-size` now shows the live `cols x rows` in
+each header so this class of question is answerable by looking.
+
+State is on the tile border via `data-state` on the tile root, with the per-tab dots kept so a
+background tab's state is still visible. Focus thickens the border rather than recolouring it,
+which would otherwise spend the state signal on something that is not state.

@@ -114,8 +114,11 @@ export function mountGrid(host, opts = {}) {
       opts.onNewInTile?.({ group, cwd: any ? any.cwd : '', cmd: any ? any.cmd : '' });
     };
 
+    // The terminal's real character grid, shown because "did this actually resize" was
+    // otherwise unanswerable from the outside.
+    const size = el('span', 'tile-size');
     const actions = el('div', 'tile-actions');
-    head.append(title, tabs, plus, actions);
+    head.append(title, tabs, plus, size, actions);
 
     const body = el('div', 'tile-body');
     const termHost = el('div', 'tile-term');
@@ -276,6 +279,7 @@ export function mountGrid(host, opts = {}) {
       termHost,
       msg,
       grip,
+      size,
       term: null,
       activeId: null,
       scrolled: false,
@@ -343,6 +347,7 @@ export function mountGrid(host, opts = {}) {
       if (tile.gen !== gen) return; // the user switched tab while this was attaching
       if (ok) {
         tile.term.fit();
+        tile.size.textContent = `${tile.term.term.cols}x${tile.term.term.rows}`;
       } else {
         showMessage(tile, `athena: ${why}`);
       }
@@ -445,7 +450,10 @@ export function mountGrid(host, opts = {}) {
     // Every tile may have changed size, not just this one: leaving the zoom restores the rest.
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        for (const t of tiles.values()) t.term?.fit();
+        for (const t of tiles.values()) {
+          t.term?.fit();
+          if (t.term) t.size.textContent = `${t.term.term.cols}x${t.term.term.rows}`;
+        }
       })
     );
   }
@@ -524,6 +532,11 @@ export function mountGrid(host, opts = {}) {
         if (window.confirm(`Close ${active.name}?`)) closeInstance(active.id).then(store.refresh);
       }, 'kill the tmux session and forget the instance');
     }
+
+    // The tile's own border carries the active instance's state, so a full screen of tiles
+    // reads at a glance without hunting for a dot.
+    tile.root.dataset.state = active ? active.state : 'empty';
+    tile.size.textContent = tile.term ? `${tile.term.term.cols}x${tile.term.term.rows}` : '';
 
     // Body: a live instance shows its terminal, anything else says why it does not.
     if (active && active.alive) {

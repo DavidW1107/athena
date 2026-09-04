@@ -9,9 +9,12 @@
 
 .grid {
   display: grid;
-  /* A tile never shrinks below a readable terminal. Past that the host scrolls,
-     which is what "as many as I open" means in practice. */
-  grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+  /* auto-FIT, not auto-fill. Both create as many 460px tracks as the row can hold, but
+     auto-fill KEEPS the empty ones, so two tiles on a wide screen sat in two narrow tracks
+     with two empty tracks beside them and never grew: 1fr of a track that is one of four.
+     auto-fit collapses the empty tracks, so the tiles that exist share the full width.
+     This is why the terminal stayed at 64 columns however the pane was resized. */
+  grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
   grid-auto-rows: minmax(300px, 1fr);
   gap: 6px;
   min-height: 100%;
@@ -226,3 +229,28 @@
 
 .tile-tab { cursor: grab; }
 .tile-tab:active { cursor: grabbing; }
+
+/* The tile's border IS the state. A screen full of tiles should be readable at a glance
+   without hunting for a dot, so the largest available surface carries the signal. */
+.tile { border-color: var(--line); transition: border-color 120ms linear; }
+.tile[data-state='working'] { border-color: var(--working); }
+.tile[data-state='needs-you'] { border-color: var(--needs); }
+.tile[data-state='paused'] { border-color: var(--paused); }
+.tile[data-state='dead'],
+.tile[data-state='ended'] { border-color: var(--dead); }
+.tile[data-state='idle'] { border-color: var(--idle); }
+
+/* Focus stays legible against a coloured border by thickening rather than recolouring,
+   because recolouring would spend the state signal on something that is not state. */
+.tile.on { box-shadow: inset 0 0 0 1px currentColor; }
+
+.tile-size {
+  flex: none;
+  font: 10px/1 var(--mono);
+  color: var(--idle);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile { transition: none; }
+}
