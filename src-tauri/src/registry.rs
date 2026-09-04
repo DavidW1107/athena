@@ -415,10 +415,17 @@ pub fn tmux_scroll(id: String, lines: i32) -> Result<(), String> {
     if lines == 0 {
         return Ok(());
     }
-    let n = lines.unsigned_abs().clamp(1, 50).to_string();
-    let _ = tmux(&["copy-mode", "-e", "-t", &sess]);
+    let n = lines.unsigned_abs().clamp(1, 200).to_string();
     let verb = if lines > 0 { "scroll-up" } else { "scroll-down" };
-    crate::tmux::tmux_run(&["send-keys", "-t", &sess, "-X", "-N", &n, verb])
+    // One tmux invocation, not two. tmux treats a bare ";" argument as a command separator,
+    // and every invocation is a process spawn: at trackpad event rates the old two-spawn
+    // version was firing hundreds of processes a second, which is what made scrolling lag
+    // and land in the wrong place.
+    crate::tmux::tmux_run(&[
+        "copy-mode", "-e", "-t", &sess,
+        ";",
+        "send-keys", "-t", &sess, "-X", "-N", &n, verb,
+    ])
 }
 
 /// Called when the user types after scrolling, so keys reach the agent and not copy mode.

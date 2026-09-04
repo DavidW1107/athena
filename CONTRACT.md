@@ -881,3 +881,23 @@ Recomputed from a ResizeObserver on the host, since the column cap depends on wi
 
 **The manual resize grip is gone.** A computed layout and per-tile hand-sizing cannot both own the
 grid without a real tiling manager. `athena.tileSpans` is no longer read or written.
+
+## v1.14 scroll accuracy
+
+Scrolling was inaccurate because every wheel event fired its own `tmux_scroll`, and each of those
+spawned TWO processes (`copy-mode` then `send-keys`). A trackpad emits a stream of small pixel
+deltas, so a single gesture became hundreds of concurrent process spawns that completed out of
+order and left the pane somewhere other than where the gesture pointed.
+
+Two fixes. `tmux_scroll` now issues ONE invocation, using tmux's bare `";"` argument as a command
+separator. And `queueScroll` in `grid.js` accumulates pixels, flushes on a 40ms timer as a single
+line count, and keeps at most one call in flight per tile (`tile.scrollBusy`). The pixel remainder
+is carried so slow trackpad movement accumulates instead of rounding away. `PX_PER_LINE = 20`.
+
+Simulated: a 120-event fine trackpad burst moves exactly the 18 lines it should, in 18 calls
+instead of 120; a mouse-wheel burst moves 60 lines in 2 calls.
+
+The wandering cursor is tmux's copy-mode cursor, which sits wherever the scroll has reached. It is
+hidden locally with `\x1b[?25l` on the first scroll of a burst and restored with `\x1b[?25h` when
+the scroll ends. Best effort only: a tmux redraw may put it back, which is why the restore is
+unconditional rather than paired.

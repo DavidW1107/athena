@@ -32,6 +32,10 @@ const DEFAULT_FONT = 12.5;
 // ponytail: a constant. Make it a setting if 100 ever turns out to be the wrong number.
 const MIN_COLS = 100;
 
+// Pixels of wheel travel per line of scrollback. Tuned for a trackpad: small enough that a
+// gentle swipe moves, large enough that a mouse notch is not a leap.
+const PX_PER_LINE = 20;
+
 /** Small keyed maps of per-tile preferences, all failing soft to an empty object. */
 function readMap(key) {
   try {
@@ -151,10 +155,8 @@ export function mountGrid(host, opts = {}) {
         }
         const tile = tiles.get(group);
         if (!tile?.activeId) return;
-        // deltaMode 0 is pixels, 1 is already lines. Three lines a notch matches a terminal.
-        const lines = e.deltaMode === 1 ? Math.round(e.deltaY) : Math.round(e.deltaY / 40) || (e.deltaY > 0 ? 1 : -1);
-        tile.scrolled = true;
-        tmuxScroll(tile.activeId, -lines).catch(() => {});
+        // deltaMode 1 means the delta is already in lines; 0 means pixels.
+        queueScroll(tile, e.deltaMode === 1 ? e.deltaY * PX_PER_LINE : e.deltaY);
       },
       { passive: false, capture: true }
     );
@@ -227,6 +229,8 @@ export function mountGrid(host, opts = {}) {
         if (!tile?.scrolled) return;
         if (e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta') return;
         tile.scrolled = false;
+        tile.wheelPx = 0;
+        tile.term?.write('\x1b[?25h'); // whatever tmux did with it, leave it visible
         if (tile.activeId) endScroll(tile.activeId).catch(() => {});
       },
       { capture: true }
@@ -432,6 +436,47 @@ export function mountGrid(host, opts = {}) {
       tile.autoBusy = false;
     }
     showSize(tile);
+  }
+
+  /**
+   * Batch wheel movement into one tmux call at a time.
+   *
+   * A wheel event is not one scroll: a trackpad emits a stream of small pixel deltas, and
+   * firing a tmux command per event meant hundreds of process spawns a second, issued
+   * concurrently, so they completed out of order and the pane landed somewhere other than
+   * where the gesture pointed. Pixels accumulate here, flush on a short timer as a single
+   * line count, and only one call is ever in flight per tile. The pixel remainder is kept so
+   * slow trackpad movement still adds up instead of being rounded away to nothing.
+   */
+  function queueScroll(tile, deltaPx) {
+    tile.wheelPx = (tile.wheelPx || 0) + deltaPx;
+    if (!tile.scrolled) {
+      tile.scrolled = true;
+      // tmux draws its copy-mode cursor wherever the scroll has reached, which reads as the
+      // prompt cursor wandering up the history. Hiding it locally is best effort: a tmux
+      // redraw may put it back, and it is restored unconditionally when the scroll ends.
+      tile.term?.write('\x1b[?25l');
+    }
+    if (tile.scrollTimer || tile.scrollBusy) return;
+    tile.scrollTimer = setTimeout(flushScroll, 40, tile);
+  }
+
+  async function flushScroll(tile) {
+    tile.scrollTimer = null;
+    const lines = Math.trunc(tile.wheelPx / PX_PER_LINE);
+    tile.wheelPx -= lines * PX_PER_LINE;
+    if (!lines || !tile.activeId) return;
+    tile.scrollBusy = true;
+    try {
+      await tmuxScroll(tile.activeId, -lines);
+    } catch {
+      // A pane that went away mid-gesture is not worth reporting.
+    } finally {
+      tile.scrollBusy = false;
+    }
+    if (Math.abs(tile.wheelPx) >= PX_PER_LINE && !tile.scrollTimer) {
+      tile.scrollTimer = setTimeout(flushScroll, 40, tile);
+    }
   }
 
   /** Live character grid, plus the type size when it is not the default. */
