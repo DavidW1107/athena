@@ -128,8 +128,18 @@ export function mountGrid(host, opts = {}) {
     // The terminal's real character grid, shown because "did this actually resize" was
     // otherwise unanswerable from the outside.
     const size = el('span', 'tile-size');
+    // A pane in copy mode is frozen: the agent's new output does not appear until the mode
+    // ends. That has to be visible, and one click has to undo it.
+    const scrolled = el('button', 'tile-scrolled', 'scrolled');
+    scrolled.type = 'button';
+    scrolled.hidden = true;
+    scrolled.title = 'this pane is showing history and is not live, click to return to the bottom';
+    scrolled.onclick = (e) => {
+      e.stopPropagation();
+      clearScrolled(tiles.get(group));
+    };
     const actions = el('div', 'tile-actions');
-    head.append(title, tabs, plus, size, actions);
+    head.append(title, tabs, plus, scrolled, size, actions);
 
     const body = el('div', 'tile-body');
     const termHost = el('div', 'tile-term');
@@ -228,10 +238,7 @@ export function mountGrid(host, opts = {}) {
         const tile = tiles.get(group);
         if (!tile?.scrolled) return;
         if (e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta') return;
-        tile.scrolled = false;
-        tile.wheelPx = 0;
-        tile.term?.write('\x1b[?25h'); // whatever tmux did with it, leave it visible
-        if (tile.activeId) endScroll(tile.activeId).catch(() => {});
+        clearScrolled(tile);
       },
       { capture: true }
     );
@@ -264,6 +271,7 @@ export function mountGrid(host, opts = {}) {
       termHost,
       msg,
       size,
+      scrolledBadge: scrolled,
       term: null,
       activeId: null,
       scrolled: false,
@@ -452,6 +460,7 @@ export function mountGrid(host, opts = {}) {
     tile.wheelPx = (tile.wheelPx || 0) + deltaPx;
     if (!tile.scrolled) {
       tile.scrolled = true;
+      tile.scrolledBadge.hidden = false;
       // tmux draws its copy-mode cursor wherever the scroll has reached, which reads as the
       // prompt cursor wandering up the history. Hiding it locally is best effort: a tmux
       // redraw may put it back, and it is restored unconditionally when the scroll ends.
@@ -468,7 +477,10 @@ export function mountGrid(host, opts = {}) {
     if (!lines || !tile.activeId) return;
     tile.scrollBusy = true;
     try {
-      await tmuxScroll(tile.activeId, -lines);
+      // The backend reports whether the pane is still in copy mode, so returning to the
+      // bottom puts the tile back to live without a second round trip to ask.
+      const stillScrolled = await tmuxScroll(tile.activeId, -lines);
+      if (!stillScrolled) clearScrolled(tile);
     } catch {
       // A pane that went away mid-gesture is not worth reporting.
     } finally {
@@ -477,6 +489,16 @@ export function mountGrid(host, opts = {}) {
     if (Math.abs(tile.wheelPx) >= PX_PER_LINE && !tile.scrollTimer) {
       tile.scrollTimer = setTimeout(flushScroll, 40, tile);
     }
+  }
+
+  /** Leave copy mode and put the tile back to live. Safe to call when not scrolled. */
+  function clearScrolled(tile) {
+    if (!tile || !tile.scrolled) return;
+    tile.scrolled = false;
+    tile.wheelPx = 0;
+    tile.scrolledBadge.hidden = true;
+    tile.term?.write('\x1b[?25h'); // whatever tmux did with it, leave it visible
+    if (tile.activeId) endScroll(tile.activeId).catch(() => {});
   }
 
   /** Live character grid, plus the type size when it is not the default. */

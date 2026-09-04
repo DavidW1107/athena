@@ -407,13 +407,13 @@ pub fn set_group(id: String, group: String) -> Result<(), String> {
 /// application is drawing the screen, so the wheel is translated into it. `-e` leaves copy mode
 /// on its own once the user reaches the bottom again.
 #[tauri::command]
-pub fn tmux_scroll(id: String, lines: i32) -> Result<(), String> {
+pub fn tmux_scroll(id: String, lines: i32) -> Result<bool, String> {
     let sess = sess_name(&id);
     if !tmux_alive(&sess) {
         return Err("not running".into());
     }
     if lines == 0 {
-        return Ok(());
+        return Ok(false);
     }
     let n = lines.unsigned_abs().clamp(1, 200).to_string();
     let verb = if lines > 0 { "scroll-up" } else { "scroll-down" };
@@ -421,11 +421,31 @@ pub fn tmux_scroll(id: String, lines: i32) -> Result<(), String> {
     // and every invocation is a process spawn: at trackpad event rates the old two-spawn
     // version was firing hundreds of processes a second, which is what made scrolling lag
     // and land in the wrong place.
-    crate::tmux::tmux_run(&[
+    // Reaching the bottom must LEAVE copy mode. A pane in copy mode is frozen: new output from
+    // the agent does not appear until the mode ends, so a scroll that finishes at the bottom
+    // and stays in copy mode leaves a terminal that looks dead. The `-e` flag only does this
+    // for tmux's own mouse handling, not for a synthetic scroll-down, so the exit is explicit.
+    // Still one invocation: tmux takes ";" as a command separator and if-shell -F tests a
+    // format without spawning a shell.
+    let at_bottom = format!("#{{==:#{{scroll_position}},0}}");
+    let cancel = format!("send-keys -t {} -X cancel", sess);
+    // The chain ends by reporting whether the pane is STILL in copy mode, so the caller knows
+    // when the pane went live again without paying for another invocation to ask.
+    let out = tmux(&[
         "copy-mode", "-e", "-t", &sess,
         ";",
         "send-keys", "-t", &sess, "-X", "-N", &n, verb,
+        ";",
+        "if-shell", "-F", "-t", &sess, &at_bottom, &cancel,
+        ";",
+        "display-message", "-p", "-t", &sess, "#{pane_in_mode}",
     ])
+    .ok_or("tmux is not on PATH")?;
+    if !out.status.success() {
+        let e = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if e.is_empty() { "tmux refused the scroll".into() } else { e });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim() == "1")
 }
 
 /// Called when the user types after scrolling, so keys reach the agent and not copy mode.

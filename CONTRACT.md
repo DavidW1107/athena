@@ -901,3 +901,23 @@ The wandering cursor is tmux's copy-mode cursor, which sits wherever the scroll 
 hidden locally with `\x1b[?25l` on the first scroll of a burst and restored with `\x1b[?25h` when
 the scroll ends. Best effort only: a tmux redraw may put it back, which is why the restore is
 unconditional rather than paired.
+
+## v1.15 the scroll was leaving panes frozen
+
+The real defect, found by inspecting live panes rather than reasoning: `athena_60297024` was sitting
+at `in_mode=1 pos=0`, stuck in copy mode at the bottom. **A pane in copy mode is frozen** and does
+not show new agent output until the mode ends, so a scroll that finished at the bottom left a
+terminal that looked dead. `copy-mode -e` only auto-exits for tmux's own mouse handling, not for a
+synthetic `scroll-down`.
+
+`tmux_scroll` now ends its chain with `if-shell -F '#{==:#{scroll_position},0}' 'send-keys -X
+cancel'` and then `display-message -p '#{pane_in_mode}'`, so it exits at the bottom AND reports
+whether the pane is still scrolled, in the same single invocation. It returns `bool`.
+
+The grid clears its scrolled state when that returns false, and shows a `scrolled` badge in the
+tile header the whole time a pane is frozen, which is a button that returns to the bottom. A
+frozen pane must never be silent.
+
+Ruled out by measurement, so do not re-investigate: re-entering `copy-mode -e` while already in
+copy mode does NOT reset position (three batches of 40 accumulate to 120), and the combined
+`;`-separated invocation works.

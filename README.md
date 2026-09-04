@@ -134,7 +134,8 @@ when the repo already has one, so "acmr-crm" and "acmr-crm 2" can sit side by si
 
 **Merge, scroll and fullscreen.** Drag an instance's tab onto another tile to move it there,
 which is how two tiles that should have been one get merged. The wheel over a terminal scrolls that
-pane's real history through tmux copy-mode, not the application: a wheel event that reaches Claude
+pane's real history through tmux copy-mode. While scrolled the pane is frozen and shows a
+`scrolled` badge; reaching the bottom, typing, or clicking the badge puts it back to live. Not the application: a wheel event that reaches Claude
 Code is read as "cycle through past messages", which is not scrolling. Double click a tile header to fill the entire
 window with it, header included, and again to put it back. The terminal re-measures and resizes
 its pty, so the agent redraws at the new width rather than keeping the old character grid.
