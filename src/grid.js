@@ -457,6 +457,12 @@ export function mountGrid(host, opts = {}) {
    * slow trackpad movement still adds up instead of being rounded away to nothing.
    */
   function queueScroll(tile, deltaPx) {
+    // Scrolling DOWN while already at the bottom must do nothing at all. It used to enter
+    // copy mode, fail to move, and be cancelled again by the bottom check, so every downward
+    // notch made tmux enter and leave copy mode and repaint the pane. That thrash is what
+    // made a line smear down the screen.
+    if (!tile.scrolled && deltaPx > 0) return;
+
     tile.wheelPx = (tile.wheelPx || 0) + deltaPx;
     if (!tile.scrolled) {
       tile.scrolled = true;
@@ -475,6 +481,9 @@ export function mountGrid(host, opts = {}) {
     const lines = Math.trunc(tile.wheelPx / PX_PER_LINE);
     tile.wheelPx -= lines * PX_PER_LINE;
     if (!lines || !tile.activeId) return;
+    // Same guard on the flush path: a downward batch when the pane is already live has
+    // nowhere to go, and sending it would re-enter copy mode for nothing.
+    if (!tile.scrolled && lines > 0) return;
     tile.scrollBusy = true;
     try {
       // The backend reports whether the pane is still in copy mode, so returning to the
