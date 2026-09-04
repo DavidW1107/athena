@@ -921,3 +921,20 @@ frozen pane must never be silent.
 Ruled out by measurement, so do not re-investigate: re-entering `copy-mode -e` while already in
 copy mode does NOT reset position (three batches of 40 accumulate to 120), and the combined
 `;`-separated invocation works.
+
+## v1.16 the tile edge
+
+State is carried by a 2px border on the tile. Focus is a halo OUTSIDE it
+(`box-shadow: 0 0 0 1px var(--line-strong)`), never a recolour: that border colour is the state
+and nothing else may spend it.
+
+`.tile-body` is painted in `--bg`, the terminal's own ground, not `--panel`. xterm sizes itself to
+whole character rows, so there is nearly always a partial row of leftover height at the bottom;
+against `--panel` (1.19:1 lighter than the terminal) that leftover showed as a strip between the
+last line and the border, which read as a coloured bar under the terminal rather than the tile's
+edge. Matching `--bg` makes it invisible.
+
+`.tile-msg[hidden] { display: none }` restated, because `[hidden]` is a UA rule and loses to the
+class that sets `display: flex`. Third instance of this bug in this codebase (`.panel`,
+`.cost-host`, now `.tile-msg`): any rule setting `display` on an element that is toggled with the
+`hidden` attribute needs the guard.
