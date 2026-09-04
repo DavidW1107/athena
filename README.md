@@ -145,9 +145,12 @@ every pane at least 100 columns by stepping the type size down, and back up when
 size you set yourself with ctrl and the wheel always wins; ctrl-0 hands the tile back to automatic.
 The header shows the live `cols x rows`, plus `@px` when the type is not at its default.
 
-**Resize and zoom.** Drag a tile's bottom-right grip to resize it, snapping to whole grid cells so
-the grid stays gapless: a free pixel size would take the tile out of its track and leave holes
-around it. Ctrl and the wheel over a terminal changes that terminal's font size only, as do
+**Layout.** Tiles are laid out as evenly as the count allows: as square a grid as possible, fuller
+rows on top, and every row stretched to the full width. Four tiles sit in corners, five go three
+over two with the bottom pair wider, six go three over three. There is no manual tile resizing;
+the layout is computed.
+
+**Zoom.** Ctrl and the wheel over a terminal changes that terminal's font size only, as do
 ctrl-plus, ctrl-minus and ctrl-0 to reset. Both the span and the font size are remembered per tile
 alongside the tile order, in `localStorage`.
 

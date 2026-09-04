@@ -9,13 +9,12 @@
 
 .grid {
   display: grid;
-  /* auto-FIT, not auto-fill. Both create as many 460px tracks as the row can hold, but
-     auto-fill KEEPS the empty ones, so two tiles on a wide screen sat in two narrow tracks
-     with two empty tracks beside them and never grew: 1fr of a track that is one of four.
-     auto-fit collapses the empty tracks, so the tiles that exist share the full width.
-     This is why the terminal stayed at 64 columns however the pane was resized. */
-  grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
-  grid-auto-rows: minmax(300px, 1fr);
+  /* Tracks and rows are set from JS by layout(), which balances the tiles into as square a
+     grid as the count allows. A CSS-only repeat() cannot do it: the track count has to come
+     from how many tiles there are, not from how many fit. These are the fallback for the
+     instant before the first layout() runs. */
+  grid-template-columns: 1fr;
+  grid-auto-rows: minmax(220px, 1fr);
   gap: 6px;
   min-height: 100%;
 }
@@ -186,28 +185,6 @@
 
 .tile-plus:hover:not(:disabled) { color: var(--ink); }
 
-/* Resize grip. Snaps to whole grid cells; see applySpan in grid.js for why. */
-.tile-grip {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 16px;
-  height: 16px;
-  cursor: nwse-resize;
-  /* Two hairlines rather than an icon: visible enough to find, quiet enough to ignore. */
-  background:
-    linear-gradient(135deg, transparent 0 48%, var(--line-strong) 48% 56%, transparent 56%),
-    linear-gradient(135deg, transparent 0 72%, var(--line-strong) 72% 80%, transparent 80%);
-  touch-action: none;
-}
-
-.tile { position: relative; }
-
-.tile-grip:hover {
-  background:
-    linear-gradient(135deg, transparent 0 48%, var(--ink) 48% 56%, transparent 56%),
-    linear-gradient(135deg, transparent 0 72%, var(--ink) 72% 80%, transparent 80%);
-}
 
 /* Fullscreen one tile over the whole window, header included.
    `position: fixed` is what gets it above the top bar; spanning grid tracks could only ever
@@ -224,8 +201,6 @@
   border: 0;
 }
 
-/* Resizing by grid cells is meaningless once a tile owns the window. */
-.tile.zoomed .tile-grip { display: none; }
 
 .tile-tab { cursor: grab; }
 .tile-tab:active { cursor: grabbing; }

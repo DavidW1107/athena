@@ -15,11 +15,12 @@ import { MIME_INSTANCE, MIME_TILE, dragPayload, isDroppable } from './dnd.js';
 import './grid.css';
 
 const ORDER_KEY = 'athena.tileOrder';
-const SPANS_KEY = 'athena.tileSpans';
 const FONT_KEY = 'athena.tileFont';
 
-const MAX_SPAN_X = 4;
-const MAX_SPAN_Y = 3;
+// A tile never gets narrower than this, so a big fleet scrolls rather than shrinking to
+// unusable slivers. MIN_ROW_PX does the same for height.
+const MIN_TILE_PX = 360;
+const MIN_ROW_PX = 220;
 const MIN_FONT = 8;
 const MAX_FONT = 24;
 const DEFAULT_FONT = 12.5;
@@ -88,7 +89,6 @@ export function mountGrid(host, opts = {}) {
   /** @type {Map<string, any>} */
   const tiles = new Map();
   let order = readOrder();
-  let spans = readMap(SPANS_KEY);
   let fonts = readMap(FONT_KEY);
   let destroyed = false;
   let dragging = null;
@@ -133,32 +133,6 @@ export function mountGrid(host, opts = {}) {
     msg.hidden = true;
     body.append(termHost, msg);
 
-    // Resize by whole grid cells. Snapping is what keeps the grid gapless: a free pixel
-    // size would take the tile out of the track and leave holes around it.
-    const grip = el('div', 'tile-grip');
-    grip.title = 'drag to resize by whole cells';
-    grip.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      grip.setPointerCapture(e.pointerId);
-      const startX = e.clientX;
-      const startY = e.clientY;
-      const rect = root.getBoundingClientRect();
-      const move = (ev) => {
-        const { colW, rowH, colCount } = cellMetrics();
-        const sx = clamp(Math.round((rect.width + ev.clientX - startX) / colW), 1, Math.min(MAX_SPAN_X, colCount));
-        const sy = clamp(Math.round((rect.height + ev.clientY - startY) / rowH), 1, MAX_SPAN_Y);
-        applySpan(group, sx, sy);
-      };
-      const up = () => {
-        grip.removeEventListener('pointermove', move);
-        grip.removeEventListener('pointerup', up);
-        writeMap(SPANS_KEY, spans);
-      };
-      grip.addEventListener('pointermove', move);
-      grip.addEventListener('pointerup', up);
-    });
-
     // Ctrl and the wheel is the terminal zoom, scoped to THIS terminal. Without
     // preventDefault the webview zooms the entire window instead, which is not what a
     // per-terminal size control should do.
@@ -193,7 +167,7 @@ export function mountGrid(host, opts = {}) {
       toggleZoom(group);
     });
 
-    root.append(head, body, grip);
+    root.append(head, body);
 
     head.addEventListener('dragstart', (e) => {
       dragging = group;
@@ -285,7 +259,6 @@ export function mountGrid(host, opts = {}) {
       actions,
       termHost,
       msg,
-      grip,
       size,
       term: null,
       activeId: null,
@@ -318,6 +291,7 @@ export function mountGrid(host, opts = {}) {
       return a.localeCompare(b);
     });
     for (const g of sorted) grid.appendChild(tiles.get(g).root);
+    layout();
   }
 
   // ---------------------------------------------------------------- attach
@@ -383,31 +357,46 @@ export function mountGrid(host, opts = {}) {
 
   const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 
-  /** One grid cell plus one gap, read off the live computed grid rather than assumed. */
-  function cellMetrics() {
-    const cs = getComputedStyle(grid);
-    const cols = cs.gridTemplateColumns.split(' ').map(parseFloat).filter((n) => n > 0);
-    const rows = cs.gridTemplateRows.split(' ').map(parseFloat).filter((n) => n > 0);
-    const gap = parseFloat(cs.rowGap) || 0;
-    return {
-      colW: (cols[0] || 460) + gap,
-      rowH: (rows[0] || 300) + gap,
-      colCount: Math.max(1, cols.length),
-    };
-  }
+  /**
+   * Lay the tiles out as evenly as the count allows: as square a grid as possible, fuller
+   * rows on top, and every row stretched to the full width.
+   *
+   * cols = ceil(sqrt(n)) gives the squarest shape; the remainder is spread so the top rows
+   * carry the extra. To let a short last row fill the width, the grid is given lcm(row counts)
+   * tracks and each tile spans an equal share of them: with 5 tiles that is 6 tracks, the top
+   * three spanning 2 each and the bottom two spanning 3 each.
+   *
+   *   4 -> 2,2   5 -> 3,2   6 -> 3,3   7 -> 3,2,2   9 -> 3,3,3
+   */
+  function layout() {
+    const items = [...grid.children].filter((n) => n.classList.contains('tile'));
+    const n = items.length;
+    if (!n) return;
 
-  function applySpan(group, sx, sy) {
-    const tile = tiles.get(group);
-    if (!tile) return;
-    spans[group] = [sx, sy];
-    tile.root.style.gridColumn = sx > 1 ? `span ${sx}` : '';
-    tile.root.style.gridRow = sy > 1 ? `span ${sy}` : '';
-    // term.js observes its own mount element, so the refit follows from the layout change.
-  }
+    const wide = Math.max(1, Math.floor((host.clientWidth || 1200) / MIN_TILE_PX));
+    const cols = Math.min(Math.ceil(Math.sqrt(n)), wide);
+    const rows = Math.ceil(n / cols);
+    const base = Math.floor(n / rows);
+    const extra = n % rows;
+    const counts = Array.from({ length: rows }, (_, r) => base + (r < extra ? 1 : 0));
 
-  function restoreSpan(group) {
-    const s = spans[group];
-    if (Array.isArray(s) && s.length === 2) applySpan(group, s[0], s[1]);
+    const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+    const tracks = counts.reduce((a, c) => (a * c) / gcd(a, c), 1);
+
+    grid.style.gridTemplateColumns = `repeat(${tracks}, 1fr)`;
+    grid.style.gridTemplateRows = `repeat(${rows}, minmax(${MIN_ROW_PX}px, 1fr))`;
+
+    let i = 0;
+    counts.forEach((count, r) => {
+      const span = tracks / count;
+      for (let p = 0; p < count; p += 1) {
+        const el = items[i];
+        i += 1;
+        if (!el) return;
+        el.style.gridColumn = `${p * span + 1} / span ${span}`;
+        el.style.gridRow = `${r + 1}`;
+      }
+    });
   }
 
   function fontFor(group) {
@@ -626,7 +615,6 @@ export function mountGrid(host, opts = {}) {
     for (const g of groups) {
       if (tiles.has(g)) continue;
       tiles.set(g, buildTile(g));
-      restoreSpan(g);
       added = true;
     }
 
@@ -643,9 +631,14 @@ export function mountGrid(host, opts = {}) {
     }
 
     if (added) applyOrder();
+    layout();
     empty.hidden = tiles.size > 0;
     grid.hidden = tiles.size === 0;
   }
+
+  // Column count depends on the host width, so the layout is recomputed when the window is.
+  const hostRO = new ResizeObserver(() => layout());
+  hostRO.observe(host);
 
   store.subscribe(sync);
   sync();
@@ -657,6 +650,7 @@ export function mountGrid(host, opts = {}) {
     resetZoom: resetFont,
     async destroy() {
       destroyed = true;
+      hostRO.disconnect();
       store.unsubscribe(sync);
       await Promise.all([...tiles.values()].map((t) => t.chain.catch(() => {})));
       await Promise.all([...tiles.values()].map((t) => t.term?.dispose()));

@@ -858,3 +858,26 @@ choice is worse than a narrow pane. Ctrl-0 clears the manual size and hands the 
 Settled sizes: 1 tile 254 cols at 12.5px, 2 tiles 126 at 12.5px, 3 tiles 100 at 10.5px, 4 tiles 98
 at the 8px floor. The header readout shows `cols x rows` plus `@px` whenever the size is not the
 default, so a shrunken tile says so.
+
+## v1.13 balanced tile layout
+
+`layout()` in `grid.js` owns the grid tracks; CSS only carries a one-column fallback for the
+instant before it first runs. A CSS `repeat()` cannot do this, because the track count has to come
+from how many tiles exist, not how many happen to fit.
+
+`cols = ceil(sqrt(n))` gives the squarest shape, capped so no tile falls under `MIN_TILE_PX`
+(360). The remainder is spread with the fuller rows on top. To let a short last row still fill the
+width, the grid gets `lcm(row counts)` tracks and each tile spans an equal share:
+
+| n | rows | tracks | shape |
+|---|---|---|---|
+| 4 | 2,2 | 2 | corners |
+| 5 | 3,2 | 6 | top spans 2 each, bottom spans 3 each |
+| 6 | 3,3 | 3 | even |
+| 7 | 3,2,2 | 6 | |
+| 8 | 3,3,2 | 6 | |
+
+Recomputed from a ResizeObserver on the host, since the column cap depends on window width.
+
+**The manual resize grip is gone.** A computed layout and per-tile hand-sizing cannot both own the
+grid without a real tiling manager. `athena.tileSpans` is no longer read or written.
