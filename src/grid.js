@@ -422,7 +422,18 @@ export function mountGrid(host, opts = {}) {
     }
   }
 
-  /** Fill the grid with one tile, or restore the layout. Terminals refit themselves. */
+  /**
+   * Fill the whole window with one tile, or restore the layout.
+   *
+   * The refit is forced rather than left to the ResizeObserver. The observer does fire, but the
+   * terminal has to re-measure AFTER the browser has laid the new geometry out, and a resize
+   * that lands on the old character grid is exactly the "text did not reflow" symptom: two
+   * animation frames put the fit safely past layout. The pty resize that follows is what makes
+   * tmux send SIGWINCH, which is what makes the agent redraw itself at the new width.
+   *
+   * Escape is deliberately NOT bound to exit. It belongs to the agent in the terminal, and
+   * stealing it to close a view would break cancelling a turn.
+   */
   function toggleZoom(group) {
     const tile = tiles.get(group);
     if (!tile) return;
@@ -431,6 +442,12 @@ export function mountGrid(host, opts = {}) {
     tile.root.classList.toggle('zoomed', on);
     grid.classList.toggle('has-zoom', on);
     if (on) focusTile(group);
+    // Every tile may have changed size, not just this one: leaving the zoom restores the rest.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        for (const t of tiles.values()) t.term?.fit();
+      })
+    );
   }
 
   function focusTile(group) {

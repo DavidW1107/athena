@@ -138,6 +138,10 @@ pub fn send_block(sess: &str, tag: &str, text: &str) -> Result<(), String> {
 /// before new-session; raising it later does not affect panes that already exist.
 pub fn ensure_server_options() {
     let _ = tmux(&["set-option", "-g", "history-limit", "50000"]);
+    // The pane follows the attached client's size, which is how a tile going fullscreen turns
+    // into a SIGWINCH and a redraw at the new width. Without it a pane can stay pinned to the
+    // size it was created at and the text never reflows.
+    let _ = tmux(&["set-option", "-g", "window-size", "latest"]);
 }
 
 /// Leave copy mode if the pane is in it, so typing after a scroll reaches the application.

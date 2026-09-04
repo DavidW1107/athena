@@ -78,10 +78,23 @@ export function createTerm(mountEl, opts = {}) {
 
   term.onData((d) => attachedId && ptyWrite(attachedId, d));
 
+  /**
+   * Re-measure AND tell the pty, which are two different things.
+   *
+   * safeFit alone only changes how many cells xterm draws. The pty has to be resized as well,
+   * because that is what makes tmux resize the pane, which is what delivers SIGWINCH, which is
+   * what makes the agent redraw at the new width. Fitting without the pty resize is exactly the
+   * "it got bigger but the text did not reflow" symptom.
+   */
+  function fitAndSync() {
+    if (disposed) return;
+    safeFit();
+    if (attachedId) ptyResize(attachedId, term.cols, term.rows);
+  }
+
   const ro = new ResizeObserver(() => {
     if (!attachedId) return;
-    safeFit();
-    ptyResize(attachedId, term.cols, term.rows);
+    fitAndSync();
   });
   ro.observe(mountEl);
 
@@ -154,7 +167,7 @@ export function createTerm(mountEl, opts = {}) {
   return {
     attach,
     detach,
-    fit: safeFit,
+    fit: fitAndSync,
     focus: () => term.focus(),
     write: (s) => term.write(s),
     dispose,

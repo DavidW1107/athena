@@ -801,3 +801,23 @@ and the keys drive the scroller instead of the agent.
 
 tmux `mouse on` was considered and rejected. It would route the wheel natively, but it also takes
 over selection, so dragging to select would fill a tmux buffer instead of the system clipboard.
+
+## v1.10 fullscreen and reflow
+
+A zoomed tile is `position: fixed; inset: 0; z-index: 50`, which is what puts it over the header.
+Spanning grid tracks could only ever fill the grid area. This works because no ancestor sets
+`transform`, `filter` or `will-change`; any of those would make the fixed element resolve against
+that ancestor instead of the viewport.
+
+Escape is deliberately NOT bound to exit the zoom. It belongs to the agent in the terminal.
+
+**Reflow is a three-link chain and the middle link was missing.** `term.fit()` used to call only
+the fit addon, which changes how many cells xterm draws and nothing else. The exported `fit` is
+now `fitAndSync`: fit, then `pty_resize`. The pty resize is what makes tmux resize the pane, which
+delivers SIGWINCH, which makes the agent redraw at the new width. `window-size latest` must also
+be set (it is, in `ensure_server_options`) or the pane will not follow its client.
+
+Verified with a real pty holding the tty as its controlling terminal: client 80x24 to 200x50 moved
+the pane 80 to 200 and the running program re-rendered at `width=200`. A test that calls `setsid`
+without `TIOCSCTTY` will show no resize at all, because there is no foreground process group to
+signal; that is a broken test, not a broken chain.

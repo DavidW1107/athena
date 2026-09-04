@@ -206,15 +206,23 @@
     linear-gradient(135deg, transparent 0 72%, var(--ink) 72% 80%, transparent 80%);
 }
 
-/* Fullscreen one tile. Hiding the others rather than overlaying keeps the grid's own sizing
-   in charge, so the terminal refits through the same path as any other layout change. */
+/* Fullscreen one tile over the whole window, header included.
+   `position: fixed` is what gets it above the top bar; spanning grid tracks could only ever
+   fill the grid area. No ancestor sets transform, filter or will-change, so the fixed element
+   resolves against the viewport rather than against a containing block further down. */
 .grid.has-zoom > .tile { display: none; }
 
 .grid.has-zoom > .tile.zoomed {
   display: flex;
-  grid-column: 1 / -1;
-  grid-row: 1 / -1;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  border-radius: 0;
+  border: 0;
 }
+
+/* Resizing by grid cells is meaningless once a tile owns the window. */
+.tile.zoomed .tile-grip { display: none; }
 
 .tile-tab { cursor: grab; }
 .tile-tab:active { cursor: grabbing; }
