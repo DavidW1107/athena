@@ -37,6 +37,7 @@ use crate::tmux::{fg_pgid, is_stopped_pid, pane_map, sess_name};
 use crate::util::{athena_dir, home, now, proc_stat_fields};
 
 const MEMORY: &str = "memory";
+const CPU: &str = "cpu";
 const WAITING: &str = "waiting";
 const BLOCKED: &str = "blocked";
 
@@ -60,6 +61,11 @@ pub struct Rules {
     /// `some avg10` from /proc/pressure/memory, in percent. Strictly above pauses; strictly
     /// below counts towards the calm streak; exactly equal is neither.
     pub memory_threshold: f64,
+    pub cpu_enabled: bool,
+    /// `some avg10` from /proc/pressure/cpu, in percent. Read exactly like the memory
+    /// threshold. Defaults to 60 to agree with pbuild's own `PBUILD_CPU_PAUSE`, so the two
+    /// guards do not disagree about what a busy machine is.
+    pub cpu_threshold: f64,
     pub waiting_enabled: bool,
     pub waiting_tags: Vec<WaitTag>,
     pub blocked_enabled: bool,
@@ -73,6 +79,8 @@ impl Default for Rules {
         Self {
             memory_enabled: true,
             memory_threshold: 70.0,
+            cpu_enabled: true,
+            cpu_threshold: 60.0,
             waiting_enabled: true,
             waiting_tags: Vec::new(),
             // Off by default: parking a session that is waiting on the user is the one rule
@@ -91,6 +99,10 @@ impl Rules {
             self.memory_threshold = 70.0;
         }
         self.memory_threshold = self.memory_threshold.clamp(5.0, 100.0);
+        if !self.cpu_threshold.is_finite() {
+            self.cpu_threshold = 60.0;
+        }
+        self.cpu_threshold = self.cpu_threshold.clamp(5.0, 100.0);
         if !self.blocked_minutes.is_finite() {
             self.blocked_minutes = 20.0;
         }
@@ -217,6 +229,8 @@ static SELECTED: Mutex<Option<String>> = Mutex::new(None);
 /// Consecutive calm samples. Process-local on purpose: after a restart the count begins again
 /// at zero, which only ever delays a resume by one tick.
 static CALM: Mutex<u32> = Mutex::new(0);
+/// The same, for the CPU rule. Separate so a calm CPU never resumes a memory pause.
+static CPU_CALM: Mutex<u32> = Mutex::new(0);
 
 fn selected_now() -> Option<String> {
     SELECTED.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -224,10 +238,10 @@ fn selected_now() -> Option<String> {
 
 // ---------------------------------------------------------------- probes
 
-/// `some avg10` from /proc/pressure/memory: the share of the last ten seconds in which at
-/// least one task stalled on memory. None when PSI is absent or unreadable.
-fn psi_mem_avg10() -> Option<f64> {
-    let text = fs::read_to_string("/proc/pressure/memory").ok()?;
+/// `some avg10` from /proc/pressure/<res>: the share of the last ten seconds in which at
+/// least one task stalled on that resource. None when PSI is absent or unreadable.
+fn psi_avg10(res: &str) -> Option<f64> {
+    let text = fs::read_to_string(format!("/proc/pressure/{}", res)).ok()?;
     for line in text.lines() {
         let Some(rest) = line.strip_prefix("some ") else { continue };
         for field in rest.split_whitespace() {
@@ -515,11 +529,12 @@ enum Pick {
 
 /// One victim per tick: a build or a shell before a parked Claude, and the longest-idle first
 /// inside each of those bands. Everything chosen here is revalidated by `commit_pause`.
-fn memory_candidate(
+fn pressure_candidate(
     reg: &[Instance],
     panes: &HashMap<String, i32>,
     owned: &OwnedMap,
     selected: Option<&str>,
+    rule: &str,
 ) -> Pick {
     let mut mid_turn = false;
     let mut cands: Vec<(u8, u64, String)> = Vec::new();
@@ -527,7 +542,7 @@ fn memory_candidate(
         if selected == Some(inst.id.as_str()) {
             continue;
         }
-        if owned.get(&inst.id).map(|e| e.reasons.contains(MEMORY)).unwrap_or(false) {
+        if owned.get(&inst.id).map(|e| e.reasons.contains(rule)).unwrap_or(false) {
             continue;
         }
         let Some(pane) = panes.get(&sess_name(&inst.id)).copied() else { continue };
@@ -652,7 +667,7 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
     // --- 3. memory. Only a successful sample strictly below the threshold extends the calm
     // streak; an unreadable sample, a sample exactly at the threshold and a disabled rule all
     // reset it, so two nonconsecutive dips can never add up to a resume.
-    let psi = psi_mem_avg10();
+    let psi = psi_avg10("memory");
     let mut calm_guard = CALM.lock().unwrap_or_else(|e| e.into_inner());
     let mut calm = *calm_guard;
     let mut high = false;
@@ -677,7 +692,7 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
 
     if high {
         let head = format!("memory pressure {:.0}% over {:.0}%", psi.unwrap_or(0.0), rules.memory_threshold);
-        match memory_candidate(&reg, &panes, &owned, selected.as_deref()) {
+        match pressure_candidate(&reg, &panes, &owned, selected.as_deref(), MEMORY) {
             Pick::Take(id) => commit_pause(&id, MEMORY, &head, &names, &cmds, &mut owned, &mut out),
             Pick::AllMidTurn => out.push(act(
                 "",
@@ -700,6 +715,65 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
             if e.reasons.remove(MEMORY) {
                 let label = name_of(&names, id);
                 out.push(act(id, &label, MEMORY, "notice", why));
+            }
+        }
+    }
+
+    // --- 3b. cpu. Same shape as the memory rule and deliberately not folded into it: the two
+    // resources go tight independently, and a machine can be pegged on CPU while memory PSI sits
+    // at zero. That is precisely what happened on 2026-09-06 (cpu 82%, memory 0.00%), when the
+    // memory rule was the only pressure rule and so saw a perfectly calm machine.
+    //
+    // This cannot stop a session that is mid-turn - `stoppable` refuses anything `working`, and
+    // that is the correct trade, since a SIGSTOPped agent loses its API call. So this rule only
+    // ever parks genuinely idle instances to give the busy ones room. It is a second layer, not
+    // the fix for a session spawning duplicate jobs; the PreToolUse duplicate guard is that.
+    let cpu_psi = psi_avg10("cpu");
+    let mut cpu_calm_guard = CPU_CALM.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cpu_calm = *cpu_calm_guard;
+    let mut cpu_high = false;
+    if !rules.cpu_enabled {
+        cpu_calm = 0;
+    } else {
+        match cpu_psi {
+            None => {
+                cpu_calm = 0;
+                out.push(act("", "", CPU, "notice", "/proc/pressure/cpu unreadable; rule idle this tick"));
+            }
+            Some(v) if v > rules.cpu_threshold => {
+                cpu_calm = 0;
+                cpu_high = true;
+            }
+            Some(v) if v < rules.cpu_threshold => cpu_calm = cpu_calm.saturating_add(1),
+            Some(_) => cpu_calm = 0,
+        }
+    }
+    *cpu_calm_guard = cpu_calm;
+    drop(cpu_calm_guard);
+
+    if cpu_high {
+        let head = format!("cpu pressure {:.0}% over {:.0}%", cpu_psi.unwrap_or(0.0), rules.cpu_threshold);
+        match pressure_candidate(&reg, &panes, &owned, selected.as_deref(), CPU) {
+            Pick::Take(id) => commit_pause(&id, CPU, &head, &names, &cmds, &mut owned, &mut out),
+            Pick::AllMidTurn => out.push(act(
+                "",
+                "",
+                CPU,
+                "notice",
+                format!("{}, but every candidate is mid-turn; stopping one could kill a live API call, so nothing was paused", head),
+            )),
+            Pick::Nothing => out.push(act("", "", CPU, "notice", format!("{}, nothing left to pause", head))),
+        }
+    } else if rules.cpu_enabled && (cpu_calm >= 2 || cpu_psi.is_none()) {
+        let why = if cpu_psi.is_none() {
+            "no pressure signal; not holding anything on cpu grounds"
+        } else {
+            "cpu pressure back under the threshold for two ticks"
+        };
+        for (id, e) in owned.iter_mut() {
+            if e.reasons.remove(CPU) {
+                let label = name_of(&names, id);
+                out.push(act(id, &label, CPU, "notice", why));
             }
         }
     }
@@ -847,6 +921,35 @@ mod tests {
         assert_eq!(status_from_ls(text, "run1", "pane"), None);
         assert_eq!(status_from_ls(text, "run2", "panes"), None);
         assert_eq!(status_from_ls("run r  /repo\n  not done  panes\n", "r", "panes"), None);
+    }
+
+    #[test]
+    fn the_cpu_rule_is_configured_independently_of_memory() {
+        // The 2026-09-06 incident: cpu pegged, memory calm. A single shared threshold would
+        // have had to read one of those two numbers, and either choice misses one incident.
+        let r = Rules::default();
+        assert!(r.cpu_enabled);
+        assert_eq!(r.cpu_threshold, 60.0);
+        assert_ne!(r.cpu_threshold, r.memory_threshold);
+
+        // A hand-edited config cannot put either threshold out of range or make it NaN.
+        let bad = Rules { cpu_threshold: f64::NAN, memory_threshold: 900.0, ..Rules::default() }.sane();
+        assert_eq!(bad.cpu_threshold, 60.0);
+        assert_eq!(bad.memory_threshold, 100.0);
+        let low = Rules { cpu_threshold: -5.0, ..Rules::default() }.sane();
+        assert_eq!(low.cpu_threshold, 5.0);
+    }
+
+    #[test]
+    fn psi_is_read_per_resource() {
+        // Both files exist on this kernel; the point is that they are read separately and can
+        // disagree, which is the whole reason the cpu rule exists.
+        for res in ["cpu", "memory"] {
+            if let Some(v) = psi_avg10(res) {
+                assert!(v.is_finite() && v >= 0.0, "{} gave {}", res, v);
+            }
+        }
+        assert_eq!(psi_avg10("no-such-resource"), None);
     }
 
     #[test]
