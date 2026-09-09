@@ -10,6 +10,7 @@
 
 import { closeInstance, endScroll, ptyWrite, restore, setGroup, setPaused, stateLabel, tmuxScroll } from './api.js';
 import * as store from './store.js';
+import { effectiveState, getNote, prune as pruneNotes, setNote, subscribeNotes } from './notes.js';
 import { createTerm } from './term.js';
 import { MIME_INSTANCE, MIME_TILE, dragPayload, isDroppable } from './dnd.js';
 import './grid.css';
@@ -139,14 +140,79 @@ export function mountGrid(host, opts = {}) {
       e.stopPropagation();
       clearScrolled(tiles.get(group));
     };
+    // Pin a note on the ACTIVE instance. aria-pressed rather than a second label, because
+    // the button's job is to report whether a note exists as much as to add one.
+    const noteBtn = el('button', 'tile-note-btn', 'note');
+    noteBtn.type = 'button';
+    noteBtn.setAttribute('aria-pressed', 'false');
+    noteBtn.onclick = (e) => {
+      e.stopPropagation();
+      const tile = tiles.get(group);
+      if (!tile?.activeId) return;
+      // Already noted: the button is the way back out, so a second click clears it.
+      if (getNote(tile.activeId)) setNote(tile.activeId, '');
+      else openNote(tile);
+    };
     const actions = el('div', 'tile-actions');
-    head.append(title, tabs, plus, scrolled, size, actions);
+    head.append(title, tabs, plus, scrolled, size, noteBtn, actions);
 
     const body = el('div', 'tile-body');
     const termHost = el('div', 'tile-term');
     const msg = el('div', 'tile-msg');
     msg.hidden = true;
-    body.append(termHost, msg);
+
+    // The note banner. Built once and hidden, because it holds a focused input while the
+    // user types and rebuilding it on the 1s poll would steal the caret every second.
+    const note = el('div', 'tile-note');
+    note.hidden = true;
+    const noteInput = el('input', 'tile-note-text');
+    noteInput.type = 'text';
+    noteInput.maxLength = 160;
+    noteInput.placeholder = 'waiting on\u2026';
+    noteInput.setAttribute('aria-label', `note for the active instance in ${group}`);
+    const noteClear = el('button', 'tile-note-clear', '\u00d7');
+    noteClear.type = 'button';
+    noteClear.title = 'remove this note and let the instance signal normally again';
+    // The label says what the banner IS, not what the state is: the head chip already reads
+    // `held` and a third indigo "held" on the same tile is a repetition, not a reinforcement.
+    note.append(el('span', 'tile-note-label', 'note'), noteInput, noteClear);
+    body.append(termHost, msg, note);
+
+    // The banner's events belong to the banner. The tile root focuses its terminal on any
+    // click that is not a button, so without this the caret was taken out of the note input
+    // by the same click that put it there; and a keystroke that bubbled to xterm typed the
+    // note into the agent.
+    note.addEventListener('keydown', (e) => e.stopPropagation());
+    note.addEventListener('click', (e) => e.stopPropagation());
+
+    const commitNote = () => {
+      const tile = tiles.get(group);
+      if (!tile?.activeId) return;
+      // An empty commit is a delete, which is what makes select-all-delete the whole gesture.
+      setNote(tile.activeId, noteInput.value);
+    };
+
+    noteInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commitNote();
+        noteInput.blur();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        // Escape abandons the edit rather than the note: put back what was stored.
+        const tile = tiles.get(group);
+        noteInput.value = tile?.activeId ? getNote(tile.activeId) : '';
+        noteInput.blur();
+        if (!noteInput.value) renderNote(tiles.get(group));
+      }
+    });
+    noteInput.addEventListener('blur', commitNote);
+    noteClear.onclick = (e) => {
+      e.stopPropagation();
+      const tile = tiles.get(group);
+      if (tile?.activeId) setNote(tile.activeId, '');
+      tile?.term?.focus();
+    };
 
     // Ctrl and the wheel is the terminal zoom, scoped to THIS terminal. Without
     // preventDefault the webview zooms the entire window instead, which is not what a
@@ -273,6 +339,9 @@ export function mountGrid(host, opts = {}) {
       msg,
       size,
       scrolledBadge: scrolled,
+      note,
+      noteInput,
+      noteBtn,
       term: null,
       activeId: null,
       scrolled: false,
@@ -600,6 +669,33 @@ export function mountGrid(host, opts = {}) {
     tile.term?.focus();
   }
 
+  // ---------------------------------------------------------------- notes
+
+  /**
+   * Paint the banner from what is stored. Called from renderTile, so it runs on the 1s poll:
+   * the input's value is only written while the user is NOT in it, or every keystroke would
+   * be overwritten by the next tick with whatever was last committed.
+   */
+  function renderNote(tile) {
+    const text = tile.activeId ? getNote(tile.activeId) : '';
+    const editing = document.activeElement === tile.noteInput;
+    tile.note.hidden = !text && !editing;
+    if (!editing) tile.noteInput.value = text;
+    tile.noteBtn.setAttribute('aria-pressed', String(Boolean(text)));
+    tile.noteBtn.title = text
+      ? 'clear this note and let the instance signal normally again'
+      : 'note what this instance is waiting on, and hold its needs-you alarm';
+    tile.noteBtn.disabled = !tile.activeId;
+  }
+
+  /** Show the banner and put the caret in it. */
+  function openNote(tile) {
+    tile.note.hidden = false;
+    tile.noteInput.value = getNote(tile.activeId);
+    tile.noteInput.focus();
+    tile.noteInput.select();
+  }
+
   // ---------------------------------------------------------------- rendering
 
   function renderTile(tile) {
@@ -615,9 +711,10 @@ export function mountGrid(host, opts = {}) {
       tab.type = 'button';
       tab.setAttribute('role', 'tab');
       tab.setAttribute('aria-selected', String(i.id === tile.activeId));
-      tab.title = `${i.name}: ${stateLabel(i.state)}`;
+      const iState = effectiveState(i);
+      tab.title = `${i.name}: ${stateLabel(iState)}`;
       const dot = el('span', 'tile-dot');
-      dot.dataset.state = i.state;
+      dot.dataset.state = iState;
       tab.append(dot, el('span', 'tile-tab-name', i.name));
       tab.onclick = (e) => {
         e.stopPropagation();
@@ -645,9 +742,10 @@ export function mountGrid(host, opts = {}) {
     // Actions apply to the active instance only, so the row never becomes a wall of buttons.
     const active = tile.activeId ? store.getInstance(tile.activeId) : null;
     tile.actions.replaceChildren();
+    const activeState = effectiveState(active);
     if (active) {
-      const state = el('span', 'tile-state', stateLabel(active.state));
-      state.dataset.state = active.state;
+      const state = el('span', 'tile-state', stateLabel(activeState));
+      state.dataset.state = activeState;
       tile.actions.appendChild(state);
       const btn = (label, run, title) => {
         const b = el('button', 'ghost', label);
@@ -669,7 +767,8 @@ export function mountGrid(host, opts = {}) {
 
     // The tile's own border carries the active instance's state, so a full screen of tiles
     // reads at a glance without hunting for a dot.
-    tile.root.dataset.state = active ? active.state : 'empty';
+    tile.root.dataset.state = activeState;
+    renderNote(tile);
     showSize(tile);
 
     // Body: a live instance shows its terminal, anything else says why it does not.
@@ -677,7 +776,7 @@ export function mountGrid(host, opts = {}) {
       tile.msg.hidden = true;
       tile.termHost.hidden = false;
     } else if (active) {
-      showMessage(tile, `${active.name} is ${stateLabel(active.state)}.`, {
+      showMessage(tile, `${active.name} is ${stateLabel(activeState)}.`, {
         label: 'restore',
         run: () => restore(active.id).then(store.refresh),
       });
@@ -692,6 +791,8 @@ export function mountGrid(host, opts = {}) {
     if (destroyed) return;
     const instances = store.getInstances();
     const groups = new Set(instances.map((i) => i.group));
+    // The live id set is already in hand here, so orphan notes cost no poll of their own.
+    pruneNotes(instances.map((i) => i.id));
 
     for (const [g, tile] of [...tiles]) {
       if (groups.has(g)) continue;
@@ -732,6 +833,11 @@ export function mountGrid(host, opts = {}) {
   hostRO.observe(host);
 
   store.subscribe(sync);
+  // A note is a click, so it repaints now rather than up to a second later.
+  const offNotes = subscribeNotes(() => {
+    if (destroyed) return;
+    for (const tile of tiles.values()) renderTile(tile);
+  });
   sync();
 
   return {
@@ -743,6 +849,7 @@ export function mountGrid(host, opts = {}) {
     async destroy() {
       destroyed = true;
       hostRO.disconnect();
+      offNotes();
       store.unsubscribe(sync);
       await Promise.all([...tiles.values()].map((t) => t.chain.catch(() => {})));
       await Promise.all([...tiles.values()].map((t) => t.term?.dispose()));

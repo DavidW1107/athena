@@ -9,6 +9,7 @@
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 
 import { pbuildResumeAll } from './api.js';
+import { hasNote } from './notes.js';
 import * as store from './store.js';
 import { mountAttention, mountCodex, mountCounts, mountSessions } from './cards.js';
 import { mountGrid } from './grid.js';
@@ -95,6 +96,9 @@ store.subscribe(({ changed }) => {
   if (!notifyOk) return;
   for (const c of changed) {
     if (!c.from || c.from === 'needs-you' || c.to !== 'needs-you') continue;
+    // A pinned note is the user saying "I know, I am waiting on something else". Firing a
+    // desktop notification anyway is the one thing that would make the note useless.
+    if (hasNote(c.id)) continue;
     const i = store.getInstance(c.id);
     if (i) sendNotification({ title: `${i.group} · ${i.name}`, body: i.summary || 'waiting on you' });
   }

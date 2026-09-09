@@ -86,7 +86,7 @@ export function mountAutopause(host, opts = {}) {
 
         <section class="ap-rule">
           <div class="ap-head">
-            <span class="ap-eyebrow">01 · memory pressure</span>
+            <span class="ap-eyebrow">memory pressure</span>
             <label class="ap-switch"><input type="checkbox" id="ap-mem" aria-label="memory pressure rule"><span>on</span></label>
           </div>
           <p class="ap-note">Above the threshold, one instance is stopped per tick and everything
@@ -101,7 +101,7 @@ export function mountAutopause(host, opts = {}) {
 
         <section class="ap-rule">
           <div class="ap-head">
-            <span class="ap-eyebrow">02 · waiting on another run</span>
+            <span class="ap-eyebrow">waiting on another run</span>
             <label class="ap-switch"><input type="checkbox" id="ap-wait" aria-label="waiting on another run rule"><span>on</span></label>
           </div>
           <p class="ap-note">A tagged instance stays parked until pbuild's ledger reports that
@@ -121,7 +121,7 @@ export function mountAutopause(host, opts = {}) {
 
         <section class="ap-rule">
           <div class="ap-head">
-            <span class="ap-eyebrow">03 · blocked too long</span>
+            <span class="ap-eyebrow">blocked too long</span>
             <label class="ap-switch"><input type="checkbox" id="ap-blk" aria-label="blocked too long rule"><span>on</span></label>
           </div>
           <p class="ap-note">Parked after this long at needs-you, and started again the moment

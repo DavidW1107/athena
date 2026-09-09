@@ -4,7 +4,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 6px;
+  padding: 8px;
 }
 
 .grid {
@@ -15,15 +15,16 @@
      instant before the first layout() runs. */
   grid-template-columns: 1fr;
   grid-auto-rows: minmax(220px, 1fr);
-  gap: 6px;
+  gap: 8px;
   min-height: 100%;
 }
 
 .grid-empty {
   margin: 0;
-  padding: 40px 10px;
+  padding: 56px 10px;
   color: var(--dim);
   text-align: center;
+  font-size: 12.5px;
 }
 
 .tile {
@@ -33,14 +34,23 @@
   min-height: 0;
   overflow: hidden;
   border: 2px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--r-lg);
   background: var(--panel);
+  /* A pane, not a rectangle. The drop shadow lifts the tile off the wrapper ground and the
+     inset top highlight is the lit edge that makes it read as a surface with thickness;
+     without the highlight a rounded dark box on a dark ground reads as a hole. */
+  box-shadow:
+    0 1px 0 0 rgba(255, 255, 255, 0.045) inset,
+    0 2px 10px rgba(0, 0, 0, 0.35);
 }
 
 /* Focus must not repaint the border: that colour is the state and nothing else may spend it.
    A halo outside the border says "focused" without touching what the border means. */
 .tile.on {
-  box-shadow: 0 0 0 1px var(--line-strong);
+  box-shadow:
+    0 1px 0 0 rgba(255, 255, 255, 0.06) inset,
+    0 0 0 1px var(--line-strong),
+    0 6px 22px rgba(0, 0, 0, 0.5);
 }
 
 .tile.dragging { opacity: 0.45; }
@@ -55,8 +65,8 @@
   align-items: center;
   gap: 8px;
   flex: none;
-  padding: 2px 6px 2px 8px;
-  min-height: 22px;
+  padding: 3px 6px 3px 10px;
+  min-height: 26px;
   border-bottom: 1px solid var(--line);
   background: var(--panel-2);
   cursor: grab;
@@ -66,8 +76,8 @@
 
 .tile-group {
   flex: none;
-  font: 10px/1 var(--mono);
-  letter-spacing: 0.1em;
+  font: 500 9.5px/1 var(--mono);
+  letter-spacing: 0.13em;
   text-transform: uppercase;
   color: var(--dim);
 }
@@ -77,7 +87,7 @@
    ellipsize first, so scrolling is the last resort rather than the normal state. */
 .tile-tabs {
   display: flex;
-  gap: 3px;
+  gap: 2px;
   flex: 1;
   min-width: 0;
   overflow-x: auto;
@@ -87,28 +97,34 @@
 
 .tile-tabs::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
+/* A segmented control, not a row of outlined buttons: an unselected tab is bare text and
+   only the selected one gets a raised pill. Two states, one of which is invisible. */
 .tile-tab {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex: 0 1 auto;
   min-width: 0;
   max-width: 160px;
-  padding: 1px 7px;
-  border: 1px solid transparent;
-  border-radius: 5px;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: var(--r-sm);
   background: transparent;
   color: var(--dim);
-  font-size: 11px;
+  font: 400 11.5px/1.3 var(--sans);
+  letter-spacing: -0.011em;
   cursor: pointer;
 }
 
-.tile-tab:hover { background: var(--hover); }
+.tile-tab:hover { background: var(--hover); color: var(--ink); }
 
 .tile-tab.on {
-  border-color: var(--line-strong);
-  background: var(--bg);
+  background: rgba(255, 255, 255, 0.11);
   color: var(--ink);
+  font-weight: 500;
+  box-shadow:
+    0 0 0 0.5px rgba(255, 255, 255, 0.14),
+    0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 .tile-tab-name {
@@ -119,47 +135,57 @@
 
 .tile-dot {
   flex: none;
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--idle);
+  /* The dot is the same signal as the border at 1/50th the area, so it gets a bloom to hold
+     its weight. currentColor cannot be used: the dot's colour is a background, not an ink. */
+  box-shadow: 0 0 0 2.5px rgba(255, 255, 255, 0.05);
 }
 
 .tile-dot[data-state='working'] { background: var(--working); }
-.tile-dot[data-state='needs-you'] { background: var(--needs); animation: tile-pulse 1.4s ease-in-out infinite; }
+.tile-dot[data-state='needs-you'] { background: var(--needs); animation: tile-pulse 1.6s ease-in-out infinite; }
 .tile-dot[data-state='paused'] { background: var(--paused); }
+.tile-dot[data-state='held'] { background: var(--held); }
 .tile-dot[data-state='dead'],
 .tile-dot[data-state='ended'] { background: var(--dead); }
 
-@keyframes tile-pulse { 50% { opacity: 0.3; } }
+@keyframes tile-pulse { 50% { opacity: 0.28; } }
 
 .tile-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   flex: none;
 }
 
 .tile-state {
-  font: 10px/1 var(--mono);
+  font: 500 9.5px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--dim);
+  padding-right: 4px;
 }
 
 .tile-state[data-state='needs-you'] { color: var(--needs); }
 .tile-state[data-state='working'] { color: var(--working); }
+.tile-state[data-state='held'] { color: var(--held); }
 
-/* The body is painted in the TERMINAL's ground, not the panel's.
+/* The body is painted in the TERMINAL's ground, never the wrapper's.
    xterm sizes itself to whole character rows, so there is almost always a partial row of
-   leftover height at the bottom. When the body was --panel (#2f2b27) that leftover showed as a
+   leftover height at the bottom. When the body was the panel grey that leftover showed as a
    lighter strip between the last line and the state border, which read as a coloured bar
-   sitting under the terminal rather than as the tile's own edge. Matching --bg makes the
-   remainder invisible and leaves the border reading as a border on all four sides. */
+   sitting under the terminal rather than as the tile's own edge. Matching --term-bg makes the
+   remainder invisible and leaves the border reading as a border on all four sides.
+   This is also the seam that keeps the Ptyxis match intact while the chrome around it moved
+   to its own cooler material: --term-bg is #1e1e1e and --bg is not. */
 .tile-body {
   position: relative;
   flex: 1;
   min-height: 0;
-  padding: 2px 0 0 4px;
-  background: var(--bg);
+  padding: 3px 0 0 5px;
+  background: var(--term-bg);
 }
 
 .tile-term { height: 100%; }
@@ -176,6 +202,15 @@
   font-size: 12px;
 }
 
+/* A toolbar button can afford to be bare text because it sits in a row of siblings that
+   read as controls. This one is alone in the middle of an empty pane with nothing to borrow
+   affordance from, so it keeps its outline. */
+.tile-msg button {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  padding: 5px 12px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tile-dot[data-state='needs-you'] { animation: none; }
   .tile.dragging { opacity: 1; }
@@ -185,11 +220,12 @@
    this strip" rather than as another action on the active instance. */
 .tile-plus {
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   line-height: 1;
-  font-size: 14px;
+  font-size: 15px;
+  font-family: var(--sans);
   color: var(--dim);
 }
 
@@ -209,6 +245,7 @@
   z-index: 50;
   border-radius: 0;
   border: 0;
+  box-shadow: none;
 }
 
 
@@ -217,10 +254,11 @@
 
 /* The tile's border IS the state. A screen full of tiles should be readable at a glance
    without hunting for a dot, so the largest available surface carries the signal. */
-.tile { border-color: var(--line); transition: border-color 120ms linear; }
+.tile { border-color: var(--line); transition: border-color 180ms var(--ease), box-shadow 180ms var(--ease); }
 .tile[data-state='working'] { border-color: var(--working); }
 .tile[data-state='needs-you'] { border-color: var(--needs); }
 .tile[data-state='paused'] { border-color: var(--paused); }
+.tile[data-state='held'] { border-color: var(--held); }
 .tile[data-state='dead'],
 .tile[data-state='ended'] { border-color: var(--dead); }
 .tile[data-state='idle'] { border-color: var(--idle); }
@@ -229,9 +267,10 @@
    because recolouring would spend the state signal on something that is not state. */
 .tile-size {
   flex: none;
-  font: 10px/1 var(--mono);
+  font: 9.5px/1 var(--mono);
   color: var(--idle);
   font-variant-numeric: tabular-nums;
+  opacity: 0.65;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -242,13 +281,113 @@
    button because the fix is one click: go back to the bottom and the pane is live again. */
 .tile-scrolled {
   flex: none;
-  padding: 1px 6px;
-  font: 9px/1.5 var(--mono);
-  letter-spacing: 0.08em;
+  padding: 2px 7px;
+  font: 500 9px/1.5 var(--mono);
+  letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--bg);
+  color: #1a1204;
   background: var(--needs);
   border-color: var(--needs);
 }
 
-.tile-scrolled:hover:not(:disabled) { background: var(--needs); filter: brightness(1.12); }
+.tile-scrolled:hover:not(:disabled) { background: var(--needs); color: #1a1204; filter: brightness(1.1); }
+
+
+/* ------------------------------------------------------------------ held note
+
+   The note the user pins to an instance they are deliberately waiting on. It sits OVER the
+   top of the terminal rather than above it in the flex column, so pinning a note never
+   changes the pane's character grid: Claude Code hard-wraps its output at the width it had
+   when it printed, and a reflow costs real conversation legibility. The top of a Claude TUI
+   is the oldest output on screen, which is the cheapest region to cover.
+
+   This is the second place vibrancy is real - there is live terminal output behind it. */
+.tile-note {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 11px;
+  background: linear-gradient(rgba(30, 29, 46, 0.9), rgba(30, 29, 46, 0.78));
+  backdrop-filter: blur(16px) saturate(130%);
+  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  border-bottom: 1px solid var(--held-edge);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+/* The left rule is the same indigo as the tile border, so the banner and the perimeter read
+   as one statement rather than as two unrelated colours on the same tile. */
+.tile-note::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--held);
+}
+
+.tile-note-label {
+  flex: none;
+  font: 500 9px/1 var(--mono);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--held);
+}
+
+/* The banner IS the editor. There is no dialog and no edit mode: the text is an input that
+   happens to have no chrome until it is hovered or focused, which is one interaction instead
+   of three (open, type, save). Blur commits; empty commits a delete. */
+.tile-note-text {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink);
+  font: 400 12px/1.35 var(--sans);
+  letter-spacing: -0.011em;
+  transition: background 150ms var(--ease), border-color 150ms var(--ease);
+}
+
+.tile-note-text::placeholder { color: var(--dim); }
+.tile-note-text:hover { background: rgba(255, 255, 255, 0.05); }
+
+.tile-note-text:focus {
+  outline: 0;
+  background: rgba(0, 0, 0, 0.32);
+  border-color: var(--held-edge);
+}
+
+.tile-note-clear {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  line-height: 1;
+  font-size: 14px;
+  font-family: var(--sans);
+  color: var(--dim);
+}
+
+.tile-note-clear:hover:not(:disabled) { color: var(--ink); background: var(--hover); }
+
+/* The head's note button. Filled while a note is pinned, so the tile head says "there is a
+   note here" even when the banner is scrolled out of a zoomed pane. */
+.tile-note-btn {
+  flex: none;
+  padding: 3px 8px;
+  font-size: 9.5px;
+}
+
+.tile-note-btn[aria-pressed='true'] {
+  color: var(--held);
+  background: var(--held-wash);
+}
+
+.tile-note-btn[aria-pressed='true']:hover:not(:disabled) { background: var(--held-edge); color: var(--ink); }

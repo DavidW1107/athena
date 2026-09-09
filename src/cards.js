@@ -3,6 +3,7 @@
 // Each mount subscribes to the store itself and returns a destroy function.
 
 import { codexTasks, pastSessions, resumeSession } from './api.js';
+import { countHeld, isHeld, subscribeNotes } from './notes.js';
 import * as store from './store.js';
 
 const el = (tag, cls) => {
@@ -20,8 +21,11 @@ const el = (tag, cls) => {
  * @returns {{ destroy: () => void }}
  */
 export function mountAttention(host, h = {}) {
-  const off = store.subscribe(({ instances }) => {
-    const needs = instances.filter((i) => i.state === 'needs-you');
+  function render() {
+    // A held instance is deliberately parked by the user, so it does not belong in the strip
+    // whose entire job is "these are shouting at you". It stays visible on its own tile in
+    // indigo, with the reason written across it.
+    const needs = store.getInstances().filter((i) => i.state === 'needs-you' && !isHeld(i));
     host.hidden = !needs.length;
     host.replaceChildren();
     if (!needs.length) return;
@@ -34,18 +38,39 @@ export function mountAttention(host, h = {}) {
       btn.onclick = () => h.onSelect?.(i.id);
       host.appendChild(btn);
     }
-  });
-  return { destroy: off };
+  }
+  const off = store.subscribe(render);
+  const offNotes = subscribeNotes(render);
+  return {
+    destroy: () => {
+      off();
+      offNotes();
+    },
+  };
 }
 
 /** "n/m live · k waiting" in the header. */
 export function mountCounts(host) {
-  const off = store.subscribe(({ instances }) => {
+  function render() {
+    const instances = store.getInstances();
     const alive = instances.filter((i) => i.alive).length;
-    const needs = instances.filter((i) => i.state === 'needs-you').length;
-    host.textContent = `${alive}/${instances.length} live · ${needs} waiting`;
-  });
-  return { destroy: off };
+    const held = countHeld(instances);
+    // Held ones come out of "waiting" and are counted separately rather than hidden: a
+    // header that read "0 waiting" while three tiles sat blocked would be a lie, and the
+    // whole point of the note is that you still know the instance is parked.
+    const needs = instances.filter((i) => i.state === 'needs-you').length - held;
+    host.textContent =
+      `${alive}/${instances.length} live · ${needs} waiting` + (held ? ` · ${held} held` : '');
+    host.title = held ? `${held} waiting with a note pinned, alarm held` : '';
+  }
+  const off = store.subscribe(render);
+  const offNotes = subscribeNotes(render);
+  return {
+    destroy: () => {
+      off();
+      offNotes();
+    },
+  };
 }
 
 /**

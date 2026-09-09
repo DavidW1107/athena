@@ -18,7 +18,10 @@ Three moving parts, each owned by something that already exists:
   and writes one small JSON file per instance to `~/.athena/state/`. No output scraping.
 
 States: `working` (green) · `needs-you` (amber, pulsing) · `idle` (grey) · `paused` (blue) ·
-`dead` / `ended` (red).
+`dead` / `ended` (red) · `held` (indigo).
+
+`held` is the only one the backend never reports: it is what the UI paints when you have
+pinned a note on a `needs-you` instance. See "Notes" below.
 
 ## Setup
 
@@ -188,6 +191,61 @@ reordering drags are page-internal and unaffected.
 That copies the binary to `~/.local/bin/athena`, installs the icon, and writes
 `~/.local/share/applications/athena.desktop`. Nothing needs root. Athena is then searchable by
 name from the desktop and pinnable to the dock. Re-run the script after each release build.
+
+## v1.4: notes and the wrapper
+
+**Notes.** The `note` button in a tile's head pins a line of text across the top of that
+instance, and while it is pinned the instance reads `held` in indigo instead of `needs you`
+in amber: it leaves the attention strip, comes out of the header's "waiting" count into its
+own "held" count, and stops firing a desktop notification.
+
+The problem it solves is that `needs-you` means "the agent is blocked on a human", which is
+correct and is also only half the story: often the human is not the bottleneck and is waiting
+on a shard, a deploy, a call, someone's reply. An alarm you are choosing to ignore trains you
+to ignore the alarm, and that is the one signal the app exists to give. So a note downgrades
+the alarm rather than dismissing it, and writes the reason on the tile so the tile answers
+"why is this parked" by itself.
+
+Nothing is sent to the process. A note is not a pause: `SIGSTOP` frees CPU but not RAM, and
+it is exactly what the auto-pause rules refuse to do to a live turn, because a stopped
+process cannot service its own sockets and the in-flight API call times out. A note has to be
+removable with the session intact, so it never touches the session.
+
+The banner is the editor: no dialog and no edit mode, the text is an input with no chrome
+until you touch it. Enter or clicking away commits, Escape abandons the edit, and committing
+an empty note deletes it. It is drawn OVER the top of the terminal rather than above it in
+the tile, because Claude Code hard-wraps its output at the width it had when it printed, so
+a reflow would cost real conversation legibility for a banner. Notes live in `localStorage`
+keyed by instance id, beside the tile order and per-tile font, and orphans are pruned against
+the live id set on each store sync. `node src/notes.test.mjs` is the check on the downgrade
+rule.
+
+One known edge: auto-pause rule 3 ("blocked too long") runs in Rust and cannot see notes, so
+with that rule enabled a held instance is still eligible to be paused. It is off by default.
+
+**The wrapper is its own material.** The chrome moved off the terminal grey onto a cooler,
+deeper ground (`--bg`) so a tile reads as a pane with the terminal set inside it rather than
+as a border drawn on the same flat surface. The terminal ground itself did not move: `--term-bg`
+is still exactly the `#1E1E1E` of the user's Ptyxis "VS Code" profile, and `term.js` still
+hardcodes the same value, so Athena's panes and the terminal beside the window remain one
+surface. That split is the whole point of the two tokens: anything painting behind terminal
+output uses `--term-bg` and nothing else.
+
+Everything else is the same idea applied outward. Hairline rules at low alpha sit inside what
+they divide instead of drawing a second colour on top of it. Toolbar buttons carry no border
+until touched, because nine outlined pills in a 32px row is nine competing rectangles. Tile
+tabs are a segmented control, so an unselected tab is bare text and only the selected one is
+a raised pill. State colours keep their ANSI identity (green is green, orange is orange) at
+Apple system-palette values rather than neon, and every one still clears AA on all three
+grounds. Type is self-hosted Inter with the tracking pulled in at UI sizes, mono kept for
+labels and figures. `backdrop-filter` is spent only in the two places something is genuinely
+behind the surface: the modal backdrop and the note banner. A Tauri window on WebKitGTK has
+nothing behind it to blur, so vibrancy anywhere else would be a tint pretending to be a
+material.
+
+`color-scheme: dark` on `:root` is what fixes the launcher's Command dropdown. WebKitGTK was
+drawing the native popup list on a light GTK ground while the `<option>` text inherited
+`--ink`, which is white on white.
 
 ## Credits
 

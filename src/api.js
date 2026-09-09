@@ -21,6 +21,10 @@ export const STATE_LABEL = {
   dead: 'not running',
   ended: 'ended',
   paused: 'paused',
+  // Not a backend state. `held` is what the UI paints when the user has pinned a note on a
+  // needs-you instance; see notes.js. It lives here because it has to label and colour like
+  // any other state, and every state string is named exactly once in this file.
+  held: 'held',
 };
 
 /** state -> CSS custom property holding that state's colour (defined in style.css). */
@@ -31,6 +35,7 @@ export const STATE_COLOR = {
   dead: 'var(--dead)',
   ended: 'var(--dead)',
   paused: 'var(--paused)',
+  held: 'var(--held)',
 };
 
 /** Label for any state, including one this build does not know about. */

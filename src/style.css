@@ -1,90 +1,173 @@
+/* Self-hosted, no CDN: this is a desktop app and the font has to be there offline.
+   Inter is the closest face on this box to the neutral system sans an Apple app leans on;
+   Ubuntu Sans (what system-ui resolves to here) has wider apertures and a distinctly Ubuntu
+   voice, which reads as "a Linux app" rather than as no voice at all. */
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+
 :root {
-  /* This is the user's own terminal theme, not an invention: Ptyxis on its "VS Code" profile,
-     extracted from the palette Ptyxis ships (gresource: /org/gnome/Ptyxis/palettes/Vs Code.palette,
-     [Dark] Background=#1E1E1E Foreground=#CCCCCC). Athena grounds on the same #1E1E1E and takes
-     the VS Code Dark+ UI surfaces above it, so the app and the terminal beside it are one theme.
+  /* Tells WebKitGTK to render every native control - crucially the <select> popup - in its
+     dark variant. Without it GTK draws the popup list on a light ground and inherits --ink
+     for the text, which is white on white: the launcher's Command dropdown was unreadable. */
+  color-scheme: dark;
 
-     Earlier attempts were a warm brown-grey with muted pastels. That reads muddy, and a muddy
-     surface reads HEAVY, which is why "too dark" and "washed out" were the same complaint. The
-     fix is a neutral ground plus real chroma, not a lighter grey. */
-  --bg: #1e1e1e;
-  --panel: #252526;
-  --panel-2: #2d2d30;
-  --hover: rgba(255, 255, 255, 0.08);
-  --line: #3a3a3c;
-  --line-strong: #565659;
+  /* THE TERMINAL GROUND IS FIXED. This is the user's own Ptyxis "VS Code" profile background
+     (gresource: /org/gnome/Ptyxis/palettes/Vs Code.palette, [Dark] Background=#1E1E1E), and
+     term.js hardcodes the same value in its xterm theme. Anything painting behind terminal
+     output uses this and nothing else, so Athena's panes and the terminal beside the window
+     are one surface. */
+  --term-bg: #1e1e1e;
 
-  /* Text lifted above the terminal's own #CCCCCC, so chrome reads in front of the output. */
-  --ink: #f2f2f2;
-  --dim: #a6a6a6;
+  /* THE WRAPPER IS ITS OWN MATERIAL. The chrome sits a step cooler and deeper than the
+     terminal, which is what makes a tile read as a pane with the terminal set inside it
+     rather than as a border drawn on the same flat grey. Layered opaque greys, not
+     translucency: a Tauri window on WebKitGTK has nothing behind it to blur, so vibrancy
+     there is a tint pretending to be a material. Real backdrop-filter is spent only where
+     something is genuinely behind - a popover or a banner over live terminal output. */
+  --bg: #131315;
+  --panel: #1c1c1f;
+  --panel-2: #232327;
+  --hover: rgba(255, 255, 255, 0.07);
+  --active: rgba(255, 255, 255, 0.12);
 
-  /* States ARE his ANSI colours, so a green in a tile means what a green means in his shell.
-     Every one clears AA on #1e1e1e: working 12.5:1, needs 6.9:1, dead 5.1:1, paused 5.6:1. */
-  --working: #00ff9a;
-  --needs: #e89440;
+  /* Hairlines, not lines. An alpha rule sits INSIDE whatever it divides instead of drawing a
+     second colour on top of it, which is the difference between a seam and a stripe. */
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.17);
+
+  --ink: #f5f5f7;
+  --dim: #9a9aa2;
+
+  /* States keep their ANSI identity - green is green, orange is orange, red is red, blue is
+     blue - at Apple system-palette values rather than neon. #00ff9a and #e89440 read as a
+     terminal escape code got loose in the UI; these read as a considered signal, and every
+     one still clears AA on all three grounds (measured against #131315 / #1c1c1f / #1e1e1e:
+     working 8.25:1, needs 8.11:1, dead 4.89:1, held 5.73:1, idle 5.81:1 at worst). */
+  --working: #30d158;
+  --needs: #ff9f0a;
   /* Washes of the accent, spelled out rather than derived: the CSS minifier drops a literal
      fallback beside a mixed colour as a duplicate, so a derived tint can vanish silently.
      These two move with --needs by hand. */
-  --needs-wash: rgba(232, 148, 64, 0.14);
-  --needs-edge: rgba(232, 148, 64, 0.40);
-  --idle: #8b9b9d;
-  --dead: #e9653b;
-  --paused: #009afb;
-  --accent: #009afb;
+  --needs-wash: rgba(255, 159, 10, 0.11);
+  --needs-edge: rgba(255, 159, 10, 0.34);
+  --idle: #98989d;
+  --dead: #ff453a;
+  --paused: #0a84ff;
+  /* "Held" is a note the user put on an instance: they know it is waiting and they are
+     waiting on something else. Indigo because it must not be confused with the paused blue
+     (paused is a stopped process) or with any alarm. */
+  --held: #8e8cf5;
+  --held-wash: rgba(142, 140, 245, 0.13);
+  --held-edge: rgba(142, 140, 245, 0.32);
+  --accent: #0a84ff;
 
+  --sans: Inter, "Ubuntu Sans", system-ui, -apple-system, sans-serif;
   --mono: "Ubuntu Sans Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* One easing for the whole app. Fast out, long settle: motion that arrives rather than
+     motion that springs. */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --r-lg: 12px;
+  --r-md: 8px;
+  --r-sm: 6px;
 }
 
 * { box-sizing: border-box; }
 
 /* One focus ring for the whole app. The amber is the needs-you signal and is not spent on
    focus; keyboard focus is the ink hairline at 2px. */
-:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: var(--r-sm); }
 
 html, body {
   margin: 0;
   height: 100%;
   background: var(--bg);
   color: var(--ink);
-  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 400 13px/1.45 var(--sans);
+  /* Inter is drawn for optical sizes and needs pulling in at UI sizes, and subpixel
+     smoothing on a dark ground fattens every stem. Both are why the same font can look
+     cheap in one app and not in another. */
+  letter-spacing: -0.011em;
+  -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
 
-/* Chrome is overhead: every pixel here is a pixel not showing a terminal. 26px is the
-   floor that still leaves the buttons a 24px hit target. */
+/* Overlay scrollbars. A 15px GTK scrollbar with its own track is a piece of furniture in a
+   window whose whole job is to show terminals; this is a thumb and nothing else. */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.26); background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+::selection { background: rgba(10, 132, 255, 0.32); }
+
+/* Chrome is overhead: every pixel here is a pixel not showing a terminal. 32px is the floor
+   at which the row reads as a considered toolbar rather than as a squeezed one - at 26 the
+   10px labels sat hard against both edges, which is the single loudest "this is a script
+   with a window" tell in the app. Six pixels is the price. */
 header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 26px;
-  padding: 0 8px;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
 
-.wordmark { font-family: var(--mono); letter-spacing: 0.18em; font-size: 10px; flex: none; }
+.wordmark {
+  font-family: var(--mono);
+  letter-spacing: 0.2em;
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--dim);
+  flex: none;
+  margin-right: 2px;
+}
 .spacer { flex: 1; }
-.counts, .pressure { font-family: var(--mono); font-size: 10px; color: var(--dim); }
+.counts, .pressure {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
 .counts { flex: none; }
-/* The header carries seven things at v1.1. The buttons and the readouts keep their size and
+/* The header carries eight things at v1.1. The buttons and the readouts keep their size and
    the pressure line gives way first, so a narrow window never clips the launcher. */
 header > button { flex: none; }
 .pressure { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* A toolbar button carries no border until it is touched. Nine outlined pills in a 32px row
+   is nine competing rectangles; the same nine as bare labels read as one row of controls,
+   and the hover fill is enough to say "this is pressable" the moment the pointer is near. */
 button {
-  font: inherit;
-  font-size: 10px;
-  font-family: var(--mono);
-  border-radius: 4px;
-  padding: 2px 7px;
+  font: 500 10.5px/1 var(--mono);
+  letter-spacing: 0.03em;
+  border-radius: var(--r-sm);
+  padding: 5px 9px;
   cursor: pointer;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   background: transparent;
+  color: var(--dim);
+  transition: background 150ms var(--ease), color 150ms var(--ease), border-color 150ms var(--ease);
+}
+button:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+button:active:not(:disabled) { background: var(--active); }
+button.primary {
+  background: var(--active);
+  border-color: var(--line-strong);
   color: var(--ink);
 }
-button.primary { background: var(--hover); border-color: var(--line-strong); }
-button:hover:not(:disabled) { background: var(--hover); }
-button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.primary:hover:not(:disabled) { background: rgba(255, 255, 255, 0.18); }
+button:disabled { opacity: 0.38; cursor: not-allowed; }
 
 /* The strip is emptied rather than hidden when nothing needs you, so :empty is what
    takes it out of the layout. */
@@ -92,13 +175,22 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .attention {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
-  padding: 3px 8px;
+  padding: 5px 10px;
   background: var(--needs-wash);
   border-bottom: 1px solid var(--needs-edge);
 }
-.attention b { color: var(--needs); font-family: var(--mono); font-size: 11px; }
-.attention button { border-color: var(--needs-edge); }
+.attention b {
+  color: var(--needs);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.attention button { border-color: var(--needs-edge); color: var(--ink); }
+.attention button:hover:not(:disabled) { background: var(--needs-edge); }
 
 /* The shell is a flex column, so any block between the header and main (broadcast today,
    anything later) takes its own height and main keeps the remainder. Sizing main at
@@ -114,22 +206,25 @@ main { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 
 .group-label {
   font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
   color: var(--dim);
-  margin: 12px 2px 6px;
+  margin: 16px 2px 7px;
   text-transform: uppercase;
 }
 .group-label:first-child { margin-top: 0; }
 
 .card {
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--r-md);
   margin-bottom: 7px;
   overflow: hidden;
   cursor: pointer;
   background: var(--panel);
+  transition: border-color 150ms var(--ease), background 150ms var(--ease);
 }
+.card:hover { background: var(--panel-2); }
 .card.sel { border-color: var(--line-strong); }
 .banner { height: 3px; background: var(--idle); }
 .card[data-state="working"] .banner { background: var(--working); }
@@ -137,45 +232,86 @@ main { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .card[data-state="dead"] .banner { background: var(--dead); }
 .card[data-state="ended"] .banner { background: var(--dead); }
 .card[data-state="paused"] .banner { background: var(--paused); }
+.card[data-state="held"] .banner { background: var(--held); }
 @keyframes pulse { 50% { opacity: 0.32; } }
 
-.card-body { padding: 7px 9px; }
+.card-body { padding: 8px 10px; }
 .card-top { display: flex; align-items: baseline; gap: 7px; }
-.card-name { font-weight: 600; }
+.card-name { font-weight: 500; }
 .card-state { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--dim); }
 .card-sub { font-family: var(--mono); font-size: 10px; color: var(--dim); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-actions { display: flex; gap: 5px; margin-top: 7px; }
-.card-actions button { padding: 2px 7px; font-size: 10px; }
+.card-actions { display: flex; gap: 5px; margin-top: 8px; }
+.card-actions button { padding: 3px 8px; font-size: 10px; }
 
-.row { padding: 7px 8px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.row {
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background 120ms var(--ease);
+}
 .row:hover { background: var(--hover); }
 .row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-sub { font-family: var(--mono); font-size: 10px; color: var(--dim); }
 
 .muted { color: var(--dim); }
 
+/* The one place vibrancy is real: there is a whole window of terminals behind a modal, so
+   blurring it is a material rather than a tint. The 0.5px inner ring is the edge highlight
+   that stops a floating surface reading as a hole cut in the backdrop. */
 dialog {
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  border: 0;
+  border-radius: var(--r-lg);
   background: var(--panel);
   color: var(--ink);
-  padding: 18px;
+  padding: 20px;
   min-width: 420px;
+  box-shadow:
+    0 0 0 0.5px rgba(255, 255, 255, 0.11),
+    0 1px 0 0 rgba(255, 255, 255, 0.05) inset,
+    0 30px 70px rgba(0, 0, 0, 0.62),
+    0 8px 20px rgba(0, 0, 0, 0.4);
 }
-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
-dialog label { display: block; font-family: var(--mono); font-size: 10px; color: var(--dim); margin-bottom: 12px; }
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+}
+dialog label {
+  display: block;
+  font: 500 9.5px/1 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 14px;
+}
 dialog input, dialog select {
   display: block;
   width: 100%;
-  margin-top: 4px;
-  padding: 7px 8px;
-  font: 13px var(--mono);
+  margin-top: 6px;
+  padding: 8px 10px;
+  font: 13px var(--sans);
+  letter-spacing: -0.011em;
   color: var(--ink);
   background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: var(--r-sm);
+  transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease);
+}
+dialog input:focus, dialog select:focus {
+  outline: 0;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.22);
+}
+/* Belt and braces behind color-scheme: dark. WebKitGTK draws the popup list itself on some
+   GTK themes and does not always take the scheme, and an <option> with no explicit ground
+   inherits --ink onto whatever GTK painted - white on white. Naming both ends the guess. */
+dialog select option {
+  background: var(--panel-2);
+  color: var(--ink);
 }
 dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 0; }
+dialog menu button { padding: 6px 14px; }
 
 /* Feature mount points. Each stays out of the layout until its shard fills it;
    a shard styles its own subtree from its own CSS file and never edits this one. */
@@ -192,7 +328,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
 .panel {
   width: min(760px, 92vw);
   max-height: 80vh;
-  padding: 16px;
+  padding: 18px;
 }
 
 .panel[open] {
@@ -201,15 +337,16 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
 }
 
 .panel-title {
-  margin: 0 0 12px;
-  font: 600 14px/1.2 system-ui, sans-serif;
+  margin: 0 0 14px;
+  font: 600 15px/1.2 var(--sans);
+  letter-spacing: -0.018em;
 }
 
 .panel-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .panel-menu {
@@ -217,4 +354,8 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
   justify-content: flex-end;
   margin: 0;
   padding: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
 }
