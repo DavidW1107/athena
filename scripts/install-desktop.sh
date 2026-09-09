@@ -15,7 +15,14 @@ if [ ! -x "$binary" ]; then
   exit 1
 fi
 
-install -Dm755 "$binary" "$HOME/.local/bin/athena"
+# Install beside the target and RENAME over it, rather than writing the target in place.
+# Linux refuses to open a running executable for writing (ETXTBSY), and Athena running an
+# older build is the normal case when you install a new one, so `install` straight onto the
+# target failed exactly when it was needed. A rename swaps the directory entry: the running
+# process keeps its old inode and carries on until it is quit.
+install -d "$HOME/.local/bin"
+install -m755 "$binary" "$HOME/.local/bin/.athena.new"
+mv -f "$HOME/.local/bin/.athena.new" "$HOME/.local/bin/athena"
 
 for size in 32 128 256; do
   src="$repo/src-tauri/icons/${size}x${size}.png"
