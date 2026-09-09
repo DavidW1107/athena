@@ -149,9 +149,16 @@ export function mountGrid(host, opts = {}) {
       e.stopPropagation();
       const tile = tiles.get(group);
       if (!tile?.activeId) return;
-      // Already noted: the button is the way back out, so a second click clears it.
-      if (getNote(tile.activeId)) setNote(tile.activeId, '');
-      else openNote(tile);
+      // The button is the way back out as well as in, so a second click always closes:
+      // clearing a stored note, or just dismissing a banner opened and never typed into.
+      if (getNote(tile.activeId)) {
+        setNote(tile.activeId, '');
+        closeNote();
+      } else if (!tile.note.hidden) {
+        closeNote();
+      } else {
+        openNote(tile);
+      }
     };
     const actions = el('div', 'tile-actions');
     head.append(title, tabs, plus, scrolled, size, noteBtn, actions);
@@ -185,11 +192,23 @@ export function mountGrid(host, opts = {}) {
     note.addEventListener('keydown', (e) => e.stopPropagation());
     note.addEventListener('click', (e) => e.stopPropagation());
 
+    /**
+     * Take the banner off the tile. Called directly rather than left to the note-change
+     * emit, because clearing an ALREADY empty banner changes nothing, so setNote returns
+     * false, nothing is emitted and nothing repaints: the x on an empty banner looked inert.
+     */
+    const closeNote = () => {
+      noteInput.value = '';
+      note.hidden = true;
+    };
+
     const commitNote = () => {
       const tile = tiles.get(group);
       if (!tile?.activeId) return;
       // An empty commit is a delete, which is what makes select-all-delete the whole gesture.
       setNote(tile.activeId, noteInput.value);
+      // Nothing to show and nothing being typed: the banner has no reason to hold the row.
+      if (!noteInput.value.trim()) closeNote();
     };
 
     noteInput.addEventListener('keydown', (e) => {
@@ -201,16 +220,20 @@ export function mountGrid(host, opts = {}) {
         e.preventDefault();
         // Escape abandons the edit rather than the note: put back what was stored.
         const tile = tiles.get(group);
-        noteInput.value = tile?.activeId ? getNote(tile.activeId) : '';
+        const stored = tile?.activeId ? getNote(tile.activeId) : '';
+        noteInput.value = stored;
         noteInput.blur();
-        if (!noteInput.value) renderNote(tiles.get(group));
+        if (!stored) closeNote();
       }
     });
     noteInput.addEventListener('blur', commitNote);
+    // The x removes the note from the instance outright: the text is deleted, the banner
+    // comes off the terminal, and the tile goes back to signalling its own state.
     noteClear.onclick = (e) => {
       e.stopPropagation();
       const tile = tiles.get(group);
       if (tile?.activeId) setNote(tile.activeId, '');
+      closeNote();
       tile?.term?.focus();
     };
 

@@ -301,7 +301,15 @@
    when it printed, and a reflow costs real conversation legibility. The top of a Claude TUI
    is the oldest output on screen, which is the cheapest region to cover.
 
-   This is the second place vibrancy is real - there is live terminal output behind it. */
+   This is the second place vibrancy is real - there is live terminal output behind it.
+
+   The [hidden] rule is NOT redundant. The UA stylesheet hides a hidden element with
+   `[hidden] { display: none }`, which any author `display` declaration outranks, so a plain
+   `.tile-note { display: flex }` leaves the banner painted on every tile forever and makes
+   note.hidden = true a no-op - the same trap the .panel dialogs carry a comment about in
+   style.css. Toggle visibility with el.hidden and let this rule do the hiding. */
+.tile-note[hidden] { display: none; }
+
 .tile-note {
   position: absolute;
   top: 0;
