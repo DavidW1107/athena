@@ -1,4 +1,4 @@
-// Auto-pause: three independent rules that freeze an instance with SIGSTOP and let it go
+// Auto-pause: three independent rules that freeze an instance's cgroup and let it go
 // again, plus the one safety rule this whole module exists for.
 //
 // A stopped process cannot service its own sockets, so an agent turn frozen mid-flight times
@@ -12,17 +12,13 @@
 // that has just shelled out to tmux and read pbuild's ledger is already hundreds of
 // milliseconds stale.
 //
-// Every signal goes through `registry::set_paused`, which resolves the pane's foreground pgid,
-// refuses a pgid of 1 or lower and signals that same resolved value inside one call. This
-// module never resolves a pgid and then signals it as a separate step, so there is no window
-// in which the resolved group could be replaced by another one.
+// Every pause goes through `registry::set_paused`, which freezes the pane's own cgroup. It never
+// sends SIGSTOP; `tmux::set_frozen` records why (bash job control stranded every stopped agent).
 //
-// Ownership (which instance this module stopped, and which rules are holding it) is persisted
-// next to the config, the moment the stop succeeds, with the pane pid, that pid's kernel start
-// time, and the foreground pgid that was actually frozen. A pause therefore survives an Athena
-// restart; a recycled instance id cannot make a later resume signal land on a different job;
-// and neither can a pane that has since started a different foreground job, because the pgid is
-// compared before any SIGCONT is sent.
+// Ownership (which instance this module froze, and which rules are holding it) is persisted
+// next to the config, the moment the freeze succeeds, with the pane pid and that pid's kernel
+// start time. A pause therefore survives an Athena restart, and a recycled instance id cannot
+// make a later thaw land on a different pane.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -33,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::lanes::pbuild_status;
 use crate::registry::{read_reg, read_state, set_paused, Instance};
-use crate::tmux::{fg_pgid, is_stopped_pid, pane_map, sess_name};
+use crate::tmux::{is_frozen, pane_map, sess_name};
 use crate::util::{athena_dir, home, now, proc_stat_fields};
 
 const MEMORY: &str = "memory";
@@ -135,9 +131,6 @@ struct Owned {
     /// Every rule currently holding this instance down. The process starts again only when
     /// this set is empty, so two rules can never resume each other's pause.
     reasons: BTreeSet<String>,
-    /// The pgid observed at the stop. Diagnostics and the generation record; the signal itself
-    /// always re-resolves through registry::set_paused.
-    pgid: i32,
     pane_pid: i32,
     /// /proc/<pane_pid>/stat starttime. Same pid plus same start time is the same process.
     pane_start: u64,
@@ -391,7 +384,7 @@ struct Live {
 /// Everything that can move between the start of a tick and a signal, read fresh.
 fn probe(id: &str) -> Option<Live> {
     let pane = pane_map().get(&sess_name(id)).copied()?;
-    Some(Live { pane, stopped: is_stopped_pid(pane), hook: read_state(id).state })
+    Some(Live { pane, stopped: is_frozen(pane), hook: read_state(id).state })
 }
 
 // ---------------------------------------------------------------- signalling
@@ -451,11 +444,9 @@ fn commit_pause(
         Ok(()) => {
             e.pane_pid = live.pane;
             e.pane_start = proc_start(live.pane).unwrap_or(0);
-            // Read the group AFTER the stop, when it is frozen and cannot be replaced under us,
-            // and persist immediately rather than at the end of the tick: a crash between the
-            // signal and the write would otherwise leave a frozen job that the next run reads as
-            // paused by hand and never releases.
-            e.pgid = fg_pgid(&sess_name(id)).unwrap_or(0);
+            // Persist immediately rather than at the end of the tick: a crash between the freeze
+            // and the write would otherwise leave a frozen pane that the next run reads as paused
+            // by hand and never releases.
             e.since = now();
             owned.insert(id.to_string(), e);
             write_owned(owned);
@@ -472,36 +463,14 @@ fn commit_pause(
     }
 }
 
-/// Start an instance again. Returns true when ownership may be forgotten.
+/// Thaw an instance. Returns true when ownership may be forgotten.
 ///
-/// Two things this does NOT do, both of which stranded a frozen job in earlier versions:
-///
-///   * It does not skip the SIGCONT because the job "looks like it is running". `is_stopped_pid`
-///     reads `/proc/<pgid>/stat`, and a process group outlives its leader, so a group whose
-///     leader has exited reads as running while its surviving members are still frozen. SIGCONT
-///     to a group that is already running is a no-op; not sending it leaves a job stopped with
-///     nothing left to unfreeze it. So the signal is always sent.
-///   * It does not signal a pane that has moved on. The pgid frozen at the stop is compared with
-///     the pane's foreground group now, so a pane whose job was resumed by hand and replaced by
-///     a different one is forgotten rather than signalled.
+/// The thaw is always sent, even to a pane that reads as running: writing 0 to a thawed cgroup
+/// is a no-op, and skipping a resume on a misread is how earlier versions stranded a job. A pane
+/// replaced by a different process was already dropped by the generation check in the tick.
 fn try_resume(id: &str, name: &str, e: &mut Owned, out: &mut Vec<Action>) -> bool {
-    let sess = sess_name(id);
-    if !pane_map().contains_key(&sess) {
+    if !pane_map().contains_key(&sess_name(id)) {
         out.push(act(id, name, "none", "notice", "process is gone; pause forgotten"));
-        return true;
-    }
-    let Some(pgid) = fg_pgid(&sess) else {
-        out.push(act(id, name, "none", "notice", "no foreground job left in that pane; pause forgotten"));
-        return true;
-    };
-    if e.pgid != 0 && pgid != e.pgid {
-        out.push(act(
-            id,
-            name,
-            "none",
-            "notice",
-            "that pane is running a different job now; pause forgotten rather than signalled",
-        ));
         return true;
     }
     match set_paused(id.to_string(), false) {
@@ -546,7 +515,7 @@ fn pressure_candidate(
             continue;
         }
         let Some(pane) = panes.get(&sess_name(&inst.id)).copied() else { continue };
-        if is_stopped_pid(pane) {
+        if is_frozen(pane) {
             continue;
         }
         let hs = read_state(&inst.id);
@@ -725,7 +694,7 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
     // memory rule was the only pressure rule and so saw a perfectly calm machine.
     //
     // This cannot stop a session that is mid-turn - `stoppable` refuses anything `working`, and
-    // that is the correct trade, since a SIGSTOPped agent loses its API call. So this rule only
+    // that is the correct trade, since a frozen agent loses its API call. So this rule only
     // ever parks genuinely idle instances to give the busy ones room. It is a second layer, not
     // the fix for a session spawning duplicate jobs; the PreToolUse duplicate guard is that.
     let cpu_psi = psi_avg10("cpu");
@@ -814,7 +783,7 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
                 continue;
             }
             let Some(pane) = panes.get(&sess_name(&inst.id)).copied() else { continue };
-            if is_stopped_pid(pane) {
+            if is_frozen(pane) {
                 continue;
             }
             let hs = read_state(&inst.id);

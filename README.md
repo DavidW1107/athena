@@ -35,8 +35,9 @@ pinned a note on a `needs-you` instance. See "Notes" below.
 
 ## Panels
 
-- **Instances**: grouped by git repo. Click a card to attach its terminal. Pause sends
-  `SIGSTOP` to the pane's foreground process group; resume sends `SIGCONT`.
+- **Instances**: grouped by git repo. Click a card to attach its terminal. Pause freezes
+  the pane's own cgroup (`cgroup.freeze`); resume thaws it. Never `SIGSTOP`: bash job control
+  would take the terminal back from the agent and strand it as a stopped background job.
 - **Resume**: past Claude sessions for any directory Athena knows about, titled by their
   first real user message, one click to `claude --resume`.
 - **Codex**: the `codex-task` runs in `~/.codex/tasks`, live status from their `status` file.

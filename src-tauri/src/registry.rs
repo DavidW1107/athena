@@ -8,8 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::tmux::{
-    fg_pgid, git_group, is_stopped_pid, pane_map, send_block, sess_name, signal_group, tmux,
-    tmux_alive,
+    git_group, is_frozen, pane_map, pane_pid, send_block, sess_name, set_frozen, tmux, tmux_alive,
 };
 use crate::util::{athena_dir, home, now};
 
@@ -127,7 +126,7 @@ pub fn list_instances() -> Vec<InstanceView> {
             inst.session_id = hs.session_id.clone();
             dirty = true;
         }
-        let paused = pane.map(is_stopped_pid).unwrap_or(false);
+        let paused = pane.map(is_frozen).unwrap_or(false);
         let state = if !alive {
             "dead".to_string()
         } else if paused {
@@ -295,17 +294,8 @@ pub fn close(id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn set_paused(id: String, paused: bool) -> Result<(), String> {
-    let sess = sess_name(&id);
-    let pgid = fg_pgid(&sess).ok_or("no foreground job in that pane")?;
-    if pgid <= 1 {
-        return Err("refusing to signal pgid <= 1".into());
-    }
-    let sig = if paused { "STOP" } else { "CONT" };
-    if signal_group(pgid, sig) {
-        Ok(())
-    } else {
-        Err(format!("kill -{} failed", sig))
-    }
+    let pane = pane_pid(&sess_name(&id)).ok_or("no live tmux pane")?;
+    set_frozen(pane, paused)
 }
 
 /// Deliver one prompt and submit it. Multi-line text is pasted as a single prompt rather

@@ -72,7 +72,7 @@ export const restore = (id) => invoke('restore', { id });
 /** Kill the tmux session, drop the hook state file, and forget the instance. */
 export const closeInstance = (id) => invoke('close', { id });
 
-/** SIGSTOP / SIGCONT the pane's foreground process group. */
+/** Freeze / thaw the pane's own cgroup. Never SIGSTOP; see tmux::set_frozen. */
 export const setPaused = (id, paused) => invoke('set_paused', { id, paused });
 
 /** Type a line into the instance and press Enter. Rejects if the session is not running. */

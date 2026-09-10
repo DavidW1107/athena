@@ -1,11 +1,9 @@
 // tmux owns session lifetime; this module is the only place that shells out to it,
-// plus the process-group probes used to decide "paused" and to signal a job.
+// plus the cgroup freezer used to pause a pane.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
-
-use crate::util::proc_stat_fields;
 
 pub fn tmux(args: &[&str]) -> Option<std::process::Output> {
     Command::new("tmux").args(args).output().ok()
@@ -24,13 +22,6 @@ pub fn pane_pid(sess: &str) -> Option<i32> {
     String::from_utf8_lossy(&o.stdout).lines().next()?.trim().parse().ok()
 }
 
-/// Foreground process group of the pane's tty: the job actually running (claude/codex),
-/// not the shell. Signalling this group stops the whole tree.
-pub fn fg_pgid(sess: &str) -> Option<i32> {
-    // after comm: state, ppid, pgrp, session, tty_nr, tpgid
-    tpgid_of(pane_pid(sess)?)
-}
-
 /// One tmux call for the whole fleet: session name -> first pane pid.
 /// The poll runs every second, so per-instance `has-session` calls are not affordable.
 pub fn pane_map() -> HashMap<String, i32> {
@@ -47,24 +38,45 @@ pub fn pane_map() -> HashMap<String, i32> {
     m
 }
 
-pub fn tpgid_of(pid: i32) -> Option<i32> {
-    proc_stat_fields(pid)?.get(5)?.parse().ok()
-}
-
-pub fn is_stopped_pid(pane: i32) -> bool {
-    match tpgid_of(pane).and_then(proc_stat_fields) {
-        Some(f) => f.first().map(|s| s == "T").unwrap_or(false),
-        None => false,
+/// The cgroup tmux made for one pane, from the text of `/proc/<pid>/cgroup`.
+///
+/// tmux built with systemd puts every pane in its own `tmux-spawn-*.scope`. Nothing else is
+/// accepted: any other cgroup is shared (Athena's own scope, the tmux server's), and freezing it
+/// would freeze far more than one pane.
+fn spawn_scope(proc_cgroup: &str) -> Option<PathBuf> {
+    let rel = proc_cgroup.lines().find_map(|l| l.strip_prefix("0::"))?.trim();
+    if !rel.rsplit('/').next()?.starts_with("tmux-spawn-") {
+        return None;
     }
+    Some(PathBuf::from("/sys/fs/cgroup").join(rel.trim_start_matches('/')))
 }
 
-pub fn signal_group(pgid: i32, sig: &str) -> bool {
-    Command::new("sh")
-        .arg("-c")
-        .arg(format!("kill -{} -{}", sig, pgid))
-        .status()
-        .map(|s| s.success())
+fn pane_scope(pane: i32) -> Option<PathBuf> {
+    spawn_scope(&std::fs::read_to_string(format!("/proc/{}/cgroup", pane)).ok()?)
+}
+
+pub fn is_frozen(pane: i32) -> bool {
+    pane_scope(pane)
+        .and_then(|d| std::fs::read_to_string(d.join("cgroup.freeze")).ok())
+        .map(|s| s.trim() == "1")
         .unwrap_or(false)
+}
+
+/// Pause or resume a pane by freezing its cgroup.
+///
+/// This used to SIGSTOP the pane's foreground process group, and that stranded agents for days.
+/// The agent runs as a job under the pane's interactive bash, and bash's job control reacts to
+/// any stopped job: it prints `[1]+ Stopped`, takes the terminal back and resets it to cooked
+/// mode. The agent was then a background job no SIGCONT could return to the foreground, the
+/// resume saw bash in the foreground and forgot the pause, and the pane sat at a prompt printing
+/// `997;1n`, the colour-scheme reports tmux kept sending on behalf of the frozen agent.
+///
+/// A frozen task is not a stopped one. Neither bash nor tmux is told anything (tmux would
+/// SIGCONT a stopped pane process at once), and thawing is the whole of a resume.
+pub fn set_frozen(pane: i32, on: bool) -> Result<(), String> {
+    let dir = pane_scope(pane).ok_or("that pane has no cgroup of its own, so it cannot be paused safely")?;
+    std::fs::write(dir.join("cgroup.freeze"), if on { "1" } else { "0" })
+        .map_err(|e| format!("could not write cgroup.freeze: {}", e))
 }
 
 pub fn git_group(cwd: &str) -> String {
@@ -161,5 +173,22 @@ pub fn end_copy_mode(sess: &str) {
         .unwrap_or(false);
     if in_mode {
         let _ = tmux(&["send-keys", "-t", sess, "-X", "cancel"]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_pane_scope_is_ever_frozen() {
+        let app = "/user.slice/user-1000.slice/user@1000.service/app.slice";
+        assert_eq!(
+            spawn_scope(&format!("0::{}/tmux-spawn-54e4.scope\n", app)),
+            Some(PathBuf::from(format!("/sys/fs/cgroup{}/tmux-spawn-54e4.scope", app)))
+        );
+        // Athena and the tmux server share this one; freezing it would freeze every pane.
+        assert_eq!(spawn_scope(&format!("0::{}/app-gnome-athena-314532.scope\n", app)), None);
+        assert_eq!(spawn_scope("12:freezer:/\n"), None);
     }
 }

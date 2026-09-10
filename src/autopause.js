@@ -69,7 +69,7 @@ export function mountAutopause(host, opts = {}) {
   let saveChain = Promise.resolve();
   let saveSeq = 0;
   // No rule is evaluated until the saved configuration has been read. The defaults arm the
-  // memory rule, so a tick before the read lands could SIGSTOP an instance on a rule the
+  // memory rule, so a tick before the read lands could freeze an instance on a rule the
   // user had switched off.
   let booted = false;
 
