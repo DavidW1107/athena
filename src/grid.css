@@ -188,7 +188,12 @@
   background: var(--term-bg);
 }
 
-.tile-term { height: 100%; }
+/* Out of flow on purpose. In flow, the xterm's own pixel height became the tile's content
+   height, and the grid (min-height, so its 1fr rows size from content in WebKit) grew every
+   row to fit the tallest terminal. A terminal fitted to a taller tile never shrank back: the
+   grid overflowed the window and the bottom rows, input box included, sat below the fold
+   where the wheel scrolls tmux rather than the page. The inset mirrors the body padding. */
+.tile-term { position: absolute; inset: 3px 0 0 5px; }
 
 .tile-msg[hidden] { display: none; }
 
