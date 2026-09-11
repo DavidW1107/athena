@@ -721,6 +721,9 @@ export function mountGrid(host, opts = {}) {
 
   // ---------------------------------------------------------------- rendering
 
+  /** " · B" for an instance on a second subscription; account "a" is the default and unmarked. */
+  const acctTag = (i) => (i.account && i.account !== 'a' ? ` · ${i.account.toUpperCase()}` : '');
+
   function renderTile(tile) {
     const members = store
       .getInstances()
@@ -735,10 +738,10 @@ export function mountGrid(host, opts = {}) {
       tab.setAttribute('role', 'tab');
       tab.setAttribute('aria-selected', String(i.id === tile.activeId));
       const iState = effectiveState(i);
-      tab.title = `${i.name}: ${stateLabel(iState)}`;
+      tab.title = `${i.name}: ${stateLabel(iState)}${acctTag(i)}`;
       const dot = el('span', 'tile-dot');
       dot.dataset.state = iState;
-      tab.append(dot, el('span', 'tile-tab-name', i.name));
+      tab.append(dot, el('span', 'tile-tab-name', i.name + acctTag(i)));
       tab.onclick = (e) => {
         e.stopPropagation();
         if (i.id !== tile.activeId) setActive(tile, i.id);
@@ -767,7 +770,7 @@ export function mountGrid(host, opts = {}) {
     tile.actions.replaceChildren();
     const activeState = effectiveState(active);
     if (active) {
-      const state = el('span', 'tile-state', stateLabel(activeState));
+      const state = el('span', 'tile-state', stateLabel(activeState) + acctTag(active));
       state.dataset.state = activeState;
       tile.actions.appendChild(state);
       const btn = (label, run, title) => {

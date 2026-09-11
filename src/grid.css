@@ -149,6 +149,7 @@
 .tile-dot[data-state='paused'] { background: var(--paused); }
 .tile-dot[data-state='held'] { background: var(--held); }
 .tile-dot[data-state='dead'],
+.tile-dot[data-state='limited'],
 .tile-dot[data-state='ended'] { background: var(--dead); }
 
 @keyframes tile-pulse { 50% { opacity: 0.28; } }
@@ -265,6 +266,7 @@
 .tile[data-state='paused'] { border-color: var(--paused); }
 .tile[data-state='held'] { border-color: var(--held); }
 .tile[data-state='dead'],
+.tile[data-state='limited'],
 .tile[data-state='ended'] { border-color: var(--dead); }
 .tile[data-state='idle'] { border-color: var(--idle); }
 

@@ -248,6 +248,32 @@ material.
 drawing the native popup list on a light GTK ground while the `<option>` text inherited
 `--ink`, which is white on white.
 
+## v1.5: two subscriptions
+
+**One config, two logins.** `~/.claude` stays the real store and is account `a` (plain `claude`).
+`scripts/setup-account.sh b` makes `~/.claude-b`, a thin profile that symlinks every shared item
+back to it: CLAUDE.md, settings, skills, agents, hooks, plugins, and `projects/`. That last one is
+deliberate. It holds the auto-memory, and moving a session to the other account is
+`claude --resume <id>`, which only finds the transcript if both accounts see the same directory.
+Only the login (`.credentials.json`) and identity (`.claude.json`) stay per account. User-scope MCP
+servers and folder trust live in `~/.claude.json`, so the script copies those across. Run the
+profile with `CLAUDE_CONFIG_DIR=~/.claude-b claude` (alias `ccb`); the statusline tags each session
+`[A]` or `B`.
+
+**Switching on the limit.** The state hook also listens to `StopFailure`. A usage limit ("You've hit
+your session limit · resets 6pm") marks that account out in `~/.athena/accounts/<x>.json` until the
+reset it names, and the instance reads `limit hit`. `src-tauri/src/accounts.rs` polls every 5s,
+stops the claude in that pane, and types `claude --resume <id> '<carry on>'` on an account with
+allowance left, so the interrupted work continues in the same tile on the other login. New launches
+and restores go to the first account with allowance, `a` first. An instance stays where it lands
+until that account runs out as well. When every account is out, it waits, and the first reset
+resumes it in place.
+
+The mark is written by every session, not just Athena's, so a limit hit in a plain terminal still
+steers Athena. A completed turn on a marked account clears the mark, which also recovers from a
+misread reset time. Transient 429s ("temporary capacity issue") never count as a limit.
+`node hooks/limit.test.mjs` checks the reset parser.
+
 ## Credits
 
 The application icon is "Spartan helmet" by Delapouite from game-icons.net, used under CC BY 3.0,

@@ -21,6 +21,9 @@ pub struct Instance {
     pub cmd: String,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Which subscription it runs on, see accounts.rs. None is account "a".
+    #[serde(default)]
+    pub account: Option<String>,
     #[serde(default)]
     pub created: u64,
 }
@@ -82,6 +85,8 @@ pub struct HookState {
     pub summary: Option<String>,
     #[serde(default)]
     pub ts: Option<u64>,
+    #[serde(default)]
+    pub account: Option<String>,
 }
 
 pub fn read_state(id: &str) -> HookState {
@@ -100,6 +105,7 @@ pub struct InstanceView {
     pub cmd: String,
     pub created: u64,
     pub session_id: Option<String>,
+    pub account: Option<String>,
     pub alive: bool,
     pub paused: bool,
     pub state: String,
@@ -126,6 +132,11 @@ pub fn list_instances() -> Vec<InstanceView> {
             inst.session_id = hs.session_id.clone();
             dirty = true;
         }
+        // Same for the account, so a restore after a reboot lands on the one it last ran on.
+        if hs.account.is_some() && hs.account != inst.account {
+            inst.account = hs.account.clone();
+            dirty = true;
+        }
         let paused = pane.map(is_frozen).unwrap_or(false);
         let state = if !alive {
             "dead".to_string()
@@ -142,6 +153,7 @@ pub fn list_instances() -> Vec<InstanceView> {
             cmd: inst.cmd.clone(),
             created: inst.created,
             session_id: inst.session_id.clone(),
+            account: inst.account.clone(),
             alive,
             paused,
             state,
@@ -207,11 +219,13 @@ pub fn launch_in(
     // The session exists from here on, so a delivery failure is reported with the instance
     // registered rather than thrown away: the user has a tmux session either way and needs the
     // card to reach it.
-    let delivered = tmux(&["send-keys", "-t", &sess, &cmd, "Enter"])
+    // A claude launch goes to whichever account has allowance left, "a" first.
+    let account = crate::accounts::choose("a").unwrap_or_else(|| "a".into());
+    let delivered = tmux(&["send-keys", "-t", &sess, &crate::accounts::on_account(&account, &cmd), "Enter"])
         .map(|o| o.status.success())
         .unwrap_or(false);
 
-    let inst = Instance { id, name, cwd, group, cmd, session_id: None, created: now() };
+    let inst = Instance { id, name, cwd, group, cmd, session_id: None, account: Some(account), created: now() };
     let mut reg = read_reg();
     reg.push(inst.clone());
     write_reg(&reg);
@@ -258,6 +272,8 @@ pub fn restore(id: String) -> Result<(), String> {
         (Some(sid), c) if c.starts_with("claude") => format!("claude --resume {}", sid),
         _ => inst.cmd.clone(),
     };
+    let pref = inst.account.as_deref().unwrap_or("a");
+    let line = crate::accounts::on_account(&crate::accounts::choose(pref).unwrap_or_else(|| pref.into()), &line);
     if !tmux(&["send-keys", "-t", &sess, &line, "Enter"]).map(|o| o.status.success()).unwrap_or(false) {
         return Err(format!("the session was recreated but `{}` could not be sent to it", line));
     }

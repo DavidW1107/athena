@@ -21,6 +21,9 @@ export const STATE_LABEL = {
   dead: 'not running',
   ended: 'ended',
   paused: 'paused',
+  // Hit a usage limit. accounts.rs moves it to an account with allowance left within seconds;
+  // it stays in this state only while every account is out.
+  limited: 'limit hit',
   // Not a backend state. `held` is what the UI paints when the user has pinned a note on a
   // needs-you instance; see notes.js. It lives here because it has to label and colour like
   // any other state, and every state string is named exactly once in this file.
@@ -35,6 +38,7 @@ export const STATE_COLOR = {
   dead: 'var(--dead)',
   ended: 'var(--dead)',
   paused: 'var(--paused)',
+  limited: 'var(--dead)',
   held: 'var(--held)',
 };
 

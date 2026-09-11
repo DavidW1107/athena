@@ -8,6 +8,7 @@
 // invoke_handler list at integration time; it never edits anything else here.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod accounts;
 mod adopt;
 mod autopause;
 mod broadcast;
@@ -27,6 +28,7 @@ use pty::PtyStore;
 fn main() {
     util::athena_dir();
     tmux::ensure_server_options();
+    std::thread::spawn(accounts::watch);
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())

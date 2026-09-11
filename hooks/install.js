@@ -10,7 +10,7 @@ const settings = path.join(process.env.HOME, '.claude', 'settings.json');
 const hook = path.join(here, 'athena-state.js');
 const node = process.execPath;
 const cmd = `${node} "${hook}"`;
-const EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Notification', 'Stop', 'SessionEnd'];
+const EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Notification', 'Stop', 'StopFailure', 'SessionEnd'];
 const uninstall = process.argv.includes('--uninstall');
 
 // A first run on a machine with no settings.json is the normal case, not an error.

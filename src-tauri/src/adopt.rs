@@ -111,6 +111,7 @@ pub fn adopt_session(session: String, name: String) -> Result<InstanceView, Stri
         group: git_group(&found.cwd),
         cmd: found.command,
         session_id: None,
+        account: None,
         created: now(),
     })
 }
@@ -326,6 +327,7 @@ pub fn adopt_process(pid: i32, name: String) -> Result<InstanceView, String> {
         group: git_group(&cwd),
         cmd: leaf,
         session_id: None,
+        account: None,
         created: now(),
     })
 }
@@ -480,7 +482,7 @@ pub fn list_running_agents() -> Vec<RunningAgent> {
 }
 
 /// Ask a process to exit and wait briefly for it to actually go.
-fn terminate_and_wait(pid: i32) -> bool {
+pub(crate) fn terminate_and_wait(pid: i32) -> bool {
     if Command::new("kill").args(["-TERM", &pid.to_string()]).status().is_err() {
         return false;
     }

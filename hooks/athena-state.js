@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { accountOf, isUsageLimit, resetEpoch } from './limit.js';
 
 /**
  * Which instance is this hook speaking for.
@@ -34,14 +35,43 @@ function resolveId() {
   }
 }
 
+/**
+ * Record, per subscription, that it is out of usage and until when. Runs for EVERY session, not
+ * just Athena's, so a limit hit in a plain terminal still steers Athena's launches and switches.
+ * A turn that completes proves the account works again, which also heals a misread reset time;
+ * the 60s grace keeps a turn that was already finishing when the limit landed from clearing it.
+ */
+function markAccount(ev, p, acct) {
+  const file = path.join(process.env.HOME, '.athena', 'accounts', `${acct}.json`);
+  const now = Math.floor(Date.now() / 1000);
+  const text = [p.last_assistant_message, p.error_details]
+    .filter(Boolean)
+    .map((x) => (typeof x === 'string' ? x : JSON.stringify(x)))
+    .join(' ');
+  try {
+    if (ev === 'StopFailure' && isUsageLimit(p.error, text)) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ until: resetEpoch(text), msg: text.slice(0, 200), ts: now }));
+      fs.renameSync(tmp, file);
+    } else if (ev === 'Stop' && fs.existsSync(file)) {
+      if (JSON.parse(fs.readFileSync(file, 'utf8')).ts < now - 60) fs.unlinkSync(file);
+    }
+  } catch { /* best-effort, like the state file */ }
+  return text;
+}
+
 const id = resolveId();
-if (!id) process.exit(0); // not an Athena instance: nothing to report
 
 let input = '';
 process.stdin.on('data', (d) => (input += d));
 process.stdin.on('end', () => {
   let p = {};
   try { p = JSON.parse(input || '{}'); } catch { /* keep going with an empty payload */ }
+
+  const acct = accountOf(process.env.CLAUDE_CONFIG_DIR, process.env.HOME);
+  const failText = markAccount(p.hook_event_name || '', p, acct);
+  if (!id) process.exit(0); // not an Athena instance: nothing more to report
 
   const dir = path.join(process.env.HOME, '.athena', 'state');
   const file = path.join(dir, `${id}.json`);
@@ -52,6 +82,7 @@ process.stdin.on('end', () => {
   const next = { ...cur, ts: Math.floor(Date.now() / 1000) };
   if (p.session_id) next.session_id = p.session_id;
   if (p.cwd) next.cwd = p.cwd;
+  next.account = acct;
 
   switch (ev) {
     case 'SessionStart':
@@ -71,12 +102,23 @@ process.stdin.on('end', () => {
       break;
     case 'Notification':
       // Fires on permission prompts and on idle-waiting. This is the "needs you" signal.
+      // Except after a usage limit: the idle ping would bury `limited`, and accounts.rs would
+      // then never resume the instance when a limit resets.
+      if (cur.state === 'limited') break;
       next.state = 'needs-you';
       next.summary = String(p.message || next.summary || '').slice(0, 90);
       break;
     case 'Stop':
       next.state = 'idle';
       next.tool = null;
+      break;
+    case 'StopFailure':
+      // Fires instead of Stop when an API error ended the turn. A usage limit is the one Athena
+      // acts on (limits.rs moves the session to an account with allowance left); anything else
+      // ended the turn and the agent is waiting like after a normal Stop.
+      next.state = isUsageLimit(p.error, failText) ? 'limited' : 'idle';
+      next.tool = null;
+      next.summary = failText.slice(0, 90);
       break;
     case 'SessionEnd':
       next.state = 'ended';
