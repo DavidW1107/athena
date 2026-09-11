@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { accountOf, isUsageLimit, resetEpoch } from './limit.js';
+import { accountOf, isUsageLimit, keepsLimited, resetEpoch } from './limit.js';
 
 /**
  * Which instance is this hook speaking for.
@@ -121,7 +121,8 @@ process.stdin.on('end', () => {
       next.summary = failText.slice(0, 90);
       break;
     case 'SessionEnd':
-      next.state = 'ended';
+      // `limited` survives a signal stop, or accounts.rs never moves a claude that exited late.
+      next.state = keepsLimited(cur.state, p.reason) ? 'limited' : 'ended';
       break;
     default:
       break;

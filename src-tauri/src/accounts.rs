@@ -78,11 +78,13 @@ pub fn on_account(acct: &str, line: &str) -> String {
     }
 }
 
-/// Background loop, started once from main. Polls the hook state every 5s.
+/// Background loop, started once from main. The hook writes `limited` the moment the turn fails,
+/// so this poll is the whole wait before a move: 1s, a dozen small file reads.
 pub fn watch() {
-    let mut last: HashMap<String, u64> = HashMap::new();
+    // Earliest epoch each instance may be tried again.
+    let mut next: HashMap<String, u64> = HashMap::new();
     loop {
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(Duration::from_secs(1));
         for inst in read_reg() {
             if !inst.cmd.starts_with("claude") {
                 continue;
@@ -92,17 +94,22 @@ pub fn watch() {
                 continue;
             }
             let Some(sid) = hs.session_id.clone().or(inst.session_id.clone()) else { continue };
-            // ponytail: one move per instance per 2 min, so a misread reset time costs one failed
-            // resume rather than a restart loop. Per-account backoff if that ever proves too blunt.
-            if last.get(&inst.id).is_some_and(|t| now() < t + 120) {
+            if next.get(&inst.id).is_some_and(|t| now() < *t) {
                 continue;
             }
             let from = hs.account.clone().or(inst.account.clone()).unwrap_or_else(|| "a".into());
             let Some(to) = choose(&from) else { continue }; // every account is out: wait for a reset
-            last.insert(inst.id.clone(), now());
-            if let Err(e) = move_to(&inst.id, &from, &to, &sid) {
-                eprintln!("athena: could not move {} from account {} to {}: {}", inst.id, from, to, e);
-            }
+            // ponytail: 2 min after a move, so a misread reset time costs one failed resume rather
+            // than a restart loop; 10s after a failed try, which is nearly always a claude still
+            // shutting down. Per-account backoff if that ever proves too blunt.
+            let wait = match move_to(&inst.id, &from, &to, &sid) {
+                Ok(()) => 120,
+                Err(e) => {
+                    eprintln!("athena: could not move {} from account {} to {}: {}", inst.id, from, to, e);
+                    10
+                }
+            };
+            next.insert(inst.id.clone(), now() + wait);
         }
     }
 }
@@ -135,10 +142,19 @@ fn move_to(id: &str, from: &str, to: &str, sid: &str) -> Result<(), String> {
         }
     }
     // The line is typed into the pane, so the pane must be back at a shell prompt, never at a TUI.
-    let fg = tmux(&["display-message", "-p", "-t", &sess, "#{pane_current_command}"])
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
-    if !matches!(fg.as_str(), "bash" | "zsh" | "sh" | "fish") {
+    // The shell takes the terminal back a beat after claude exits, so give it up to 2s.
+    let is_shell = |c: &str| matches!(c, "bash" | "zsh" | "sh" | "fish");
+    let mut fg = String::new();
+    for _ in 0..20 {
+        fg = tmux(&["display-message", "-p", "-t", &sess, "#{pane_current_command}"])
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if is_shell(&fg) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if !is_shell(&fg) {
         return Err(format!("pane is running {} rather than a shell, so nothing was typed", fg));
     }
     // Stale `limited` would re-trigger the move; the resumed session writes its own state.

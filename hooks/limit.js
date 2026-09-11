@@ -15,7 +15,17 @@ export function isUsageLimit(error, text) {
   return error === 'rate_limit' && /hit your|usage limit/i.test(text);
 }
 
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+/**
+ * Whether a SessionEnd leaves a `limited` instance limited. A claude stopped by a signal ends with
+ * reason `other`, and Athena's own move sends that signal: a stop that lands after the move gave up
+ * waiting must not strand the instance at `ended`. /exit, /clear, /logout and /resume are the
+ * user's call, so those end it.
+ */
+export function keepsLimited(state, reason) {
+  return state === 'limited' && (!reason || reason === 'other');
+}
+
+const MONTHS =['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 /**
  * Epoch seconds the limit lifts, read from "resets 6pm", "resets 6:30pm" or "resets Sep 15, 3am".

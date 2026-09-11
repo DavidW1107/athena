@@ -1,6 +1,6 @@
 // node hooks/limit.test.mjs
 import assert from 'node:assert/strict';
-import { accountOf, isUsageLimit, resetEpoch } from './limit.js';
+import { accountOf, isUsageLimit, keepsLimited, resetEpoch } from './limit.js';
 
 const at = (s) => Math.floor(new Date(s) / 1000);
 const now = new Date('2026-09-11T15:28:00'); // local time
@@ -21,4 +21,9 @@ assert.equal(accountOf(undefined, '/home/d'), 'a');
 assert.equal(accountOf('/home/d/.claude', '/home/d'), 'a');
 assert.equal(accountOf('/home/d/.claude/', '/home/d'), 'a');
 assert.equal(accountOf('/home/d/.claude-b', '/home/d'), 'b');
+assert.ok(keepsLimited('limited', 'other'));
+assert.ok(keepsLimited('limited', undefined));
+assert.ok(!keepsLimited('limited', 'prompt_input_exit'));
+assert.ok(!keepsLimited('limited', 'resume'));
+assert.ok(!keepsLimited('idle', 'other'));
 console.log('limit ok');
