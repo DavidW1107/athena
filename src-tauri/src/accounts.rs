@@ -118,14 +118,16 @@ fn move_to(id: &str, from: &str, to: &str, sid: &str) -> Result<(), String> {
         return Err(format!("not a session id: {}", sid));
     }
     let pane = pane_pid(&sess).ok_or("no live pane")?;
+    // A limited instance is idle, which is exactly what auto-pause freezes, and a frozen claude
+    // can act on no signal. Thaw first; the resumed session is live work again anyway.
+    let _ = crate::tmux::set_frozen(pane, false);
     let kids = Command::new("pgrep")
         .args(["-P", &pane.to_string(), "-x", "claude"])
         .output()
         .map_err(|e| format!("pgrep: {}", e))?;
     let pids: Vec<i32> = String::from_utf8_lossy(&kids.stdout).lines().filter_map(|l| l.trim().parse().ok()).collect();
-    if pids.is_empty() {
-        return Err("no claude under the pane shell, so nothing was stopped or typed".into());
-    }
+    // No claude left (it exited or crashed after the limit) is fine: the shell check below still
+    // guards the typing, and refusing here would strand the instance at `limited` forever.
     // Stop BEFORE resuming: two processes appending to one transcript is the corruption to avoid.
     for pid in pids {
         if !terminate_and_wait(pid) {

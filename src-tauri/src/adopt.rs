@@ -486,13 +486,26 @@ pub(crate) fn terminate_and_wait(pid: i32) -> bool {
     if Command::new("kill").args(["-TERM", &pid.to_string()]).status().is_err() {
         return false;
     }
-    for _ in 0..30 {
-        if !PathBuf::from(format!("/proc/{}", pid)).exists() {
-            return true;
+    // A stopped process (state T, e.g. SIGSTOPped by something else) holds TERM pending and never
+    // exits, which is how a limited Alucast session sat unmoved for 15 minutes. CONT lets it act.
+    let _ = Command::new("kill").args(["-CONT", &pid.to_string()]).status();
+    let gone = || {
+        for _ in 0..30 {
+            if !PathBuf::from(format!("/proc/{}", pid)).exists() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        false
+    };
+    if gone() {
+        return true;
     }
-    false
+    // Still here: a claude whose terminal was taken by another process group re-stops on SIGTTIN
+    // the moment its shutdown touches the tty, so TERM can never finish. KILL cannot be stopped,
+    // and the transcript is appended per message, so nothing written is lost.
+    let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+    gone()
 }
 
 /// Import a running agent: stop it, then resume its session inside a new tile.
