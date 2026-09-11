@@ -44,6 +44,13 @@ src, dst = sys.argv[1], sys.argv[2]
 a = json.load(open(src))
 b = json.load(open(dst)) if os.path.exists(dst) else {}
 b['mcpServers'] = {**a.get('mcpServers', {}), **b.get('mcpServers', {})}
+# `claude auth login` never runs first-run onboarding, so without these a session Athena resumes on
+# this profile sits on the theme picker instead of carrying on.
+for k in ('hasCompletedOnboarding', 'lastOnboardingVersion', 'lastReleaseNotesSeen', 'hasSeenTasksHint',
+          'hasCompletedClaudeInChromeOnboarding', 'hasSeenAutoModeEntryWarning',
+          'hasSeenAutoModeOutsideReadPrompt', 'hasResetAutoModeOptInForDefaultOffer'):
+    if k in a:
+        b.setdefault(k, a[k])
 projects = b.setdefault('projects', {})
 for path, cfg in a.get('projects', {}).items():
     projects[path] = {**cfg, **projects.get(path, {})}
