@@ -99,6 +99,16 @@ export function mountGrid(host, opts = {}) {
   let destroyed = false;
   let dragging = null;
 
+  // WebKitGTK sometimes never delivers dragend (drop outside the window, focus change mid-drag),
+  // which left a tile stuck at .dragging opacity. Any drop, or any pointerdown afterwards (the
+  // platform sends none while a drag is live), proves the drag is over, so all three end it.
+  function endDrag() {
+    dragging = null;
+    for (const n of grid.querySelectorAll('.tile.dragging, .tile.over')) n.classList.remove('dragging', 'over');
+  }
+  window.addEventListener('drop', endDrag, true);
+  window.addEventListener('pointerdown', endDrag, true);
+
   const grid = el('div', 'grid');
   const empty = el('p', 'grid-empty', 'No instances yet. Launch one, or adopt something already running.');
   host.replaceChildren(grid, empty);
@@ -277,11 +287,7 @@ export function mountGrid(host, opts = {}) {
       e.dataTransfer.effectAllowed = 'move';
       root.classList.add('dragging');
     });
-    head.addEventListener('dragend', () => {
-      dragging = null;
-      root.classList.remove('dragging');
-      for (const n of grid.querySelectorAll('.tile.over')) n.classList.remove('over');
-    });
+    head.addEventListener('dragend', endDrag);
 
     // dragenter and dragleave also fire for descendants, so the highlight is reference
     // counted rather than toggled; crossing a child would otherwise clear it early.
@@ -874,6 +880,8 @@ export function mountGrid(host, opts = {}) {
     resetZoom: resetFont,
     async destroy() {
       destroyed = true;
+      window.removeEventListener('drop', endDrag, true);
+      window.removeEventListener('pointerdown', endDrag, true);
       hostRO.disconnect();
       offNotes();
       store.unsubscribe(sync);
