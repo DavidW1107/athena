@@ -18,6 +18,7 @@ mod handoff;
 mod lanes;
 mod pty;
 mod registry;
+mod report;
 mod sessions;
 mod tmux;
 mod util;
@@ -66,6 +67,8 @@ fn main() {
             autopause::autopause_save,
             autopause::autopause_select,
             autopause::autopause_tick,
+            report::work_report,
+            report::export_report,
             pty::attach,
             pty::pty_write,
             pty::pty_resize,

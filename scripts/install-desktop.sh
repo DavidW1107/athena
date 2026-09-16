@@ -51,6 +51,34 @@ chmod 644 "$desktop"
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
+# Nightly work report: the last 24h saved as HTML + PDF into ~/.athena/reports at 23:55.
+# Persistent=true runs a missed night at next login. Re-running this only rewrites the units.
+node_bin="$(command -v node || echo "$HOME/.local/bin/node")"
+units="$HOME/.config/systemd/user"
+install -d "$units"
+cat > "$units/athena-report.service" <<UNIT
+[Unit]
+Description=Athena nightly work report
+
+[Service]
+Type=oneshot
+Environment=PATH=$(dirname "$node_bin"):$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=$node_bin $repo/scripts/report.mjs --hours 24 --save
+UNIT
+cat > "$units/athena-report.timer" <<UNIT
+[Unit]
+Description=Athena nightly work report
+
+[Timer]
+OnCalendar=*-*-* 23:55
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl --user daemon-reload
+systemctl --user enable --now athena-report.timer >/dev/null
+
 if pgrep -x athena >/dev/null 2>&1; then
   echo
   echo "NOTE: Athena is currently running an older build. Quit and reopen it, or the changes"
@@ -61,4 +89,5 @@ fi
 echo "Installed:"
 echo "  $HOME/.local/bin/athena"
 echo "  $desktop"
+echo "  $units/athena-report.timer (nightly report at 23:55)"
 echo "Search your desktop for 'Athena'. Re-run this after every release build."

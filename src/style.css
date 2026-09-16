@@ -359,3 +359,11 @@ dialog menu button { padding: 6px 14px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
 }
+
+/* Work report: wide enough for the A4 page it frames. */
+.panel-wide { width: min(980px, 94vw); height: 88vh; max-height: 88vh; }
+.panel-wide .panel-body { display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+.report-bar { display: flex; align-items: center; gap: 8px; }
+.report-bar .spacer { flex: 1; }
+.report-status { color: var(--dim); font-size: 12px; }
+.report-frame { flex: 1; min-height: 0; width: 100%; border: 1px solid var(--line); border-radius: 6px; background: #faf8f4; }

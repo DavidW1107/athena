@@ -126,6 +126,12 @@ export const resumeSession = (cwd, sessionId, name) =>
 /** Up to 15 codex-task runs from ~/.codex/tasks, newest first. */
 export const codexTasks = () => invoke('codex_tasks');
 
+/** @returns {Promise<string>} the work report for the last `hours` as a standalone HTML page. */
+export const workReport = (hours) => invoke('work_report', { hours });
+
+/** Save the report as HTML + PDF under ~/.athena/reports and open it. @returns {Promise<string>} the path. */
+export const exportReport = (hours) => invoke('export_report', { hours });
+
 /** Raw stdout of `pbuild ls`. */
 export const pbuildStatus = () => invoke('pbuild_status');
 

@@ -17,6 +17,7 @@
       <button id="resume-all" class="ghost" title="pbuild resume-all">resume all</button>
       <button id="open-sessions" class="ghost" title="resume a past Claude session">resume</button>
       <button id="open-codex" class="ghost" title="codex-task runs">codex</button>
+      <button id="open-report" class="ghost" title="what was done, in progress, stalled">report</button>
       <button id="open-handoff" class="ghost" title="move context between instances">handoff</button>
       <button id="adopt" class="ghost"
         title="adopt a tmux session or a process Athena did not start">adopt</button>
@@ -45,6 +46,12 @@
     <dialog id="panel-handoff" class="panel">
       <h2 class="panel-title">Hand off context</h2>
       <div id="mount-handoff" class="panel-body"></div>
+      <menu class="panel-menu"><button class="ghost" data-close>close</button></menu>
+    </dialog>
+
+    <dialog id="panel-report" class="panel panel-wide">
+      <h2 class="panel-title">Work report</h2>
+      <div id="mount-report" class="panel-body"></div>
       <menu class="panel-menu"><button class="ghost" data-close>close</button></menu>
     </dialog>
 

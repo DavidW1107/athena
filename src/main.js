@@ -20,6 +20,7 @@ import { mountBroadcast } from './broadcast.js';
 import { mountCost } from './cost.js';
 import { mountFileDrop } from './filedrop.js';
 import { mountHandoff } from './handoff.js';
+import { mountReport } from './report.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -73,6 +74,8 @@ const codex = mountCodex($('#mount-codex'));
 panel('#panel-sessions', '#open-sessions', () => sessions.render());
 panel('#panel-codex', '#open-codex', () => codex.render());
 panel('#panel-handoff', '#open-handoff');
+const report = mountReport($('#mount-report'));
+panel('#panel-report', '#open-report', () => report.render());
 
 launcher = mountLauncher({ dialog: $('#launcher'), openBtn: $('#new'), onLaunched: reveal });
 mountAdopt({ dialog: $('#adopter'), openBtn: $('#adopt'), onAdopted: reveal });

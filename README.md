@@ -279,3 +279,22 @@ misread reset time. Transient 429s ("temporary capacity issue") never count as a
 The application icon is "Spartan helmet" by Delapouite from game-icons.net, used under CC BY 3.0,
 which requires attribution. Full details, and the provenance of the colour palette, are in
 [CREDITS.md](CREDITS.md).
+
+## v1.4: work report
+
+The **report** button opens what happened over the last 24h, 48h or 7 days, split Client
+(`clients/`, `demos/`) vs Internal, each in four buckets: **done** (commits, or real work that
+went quiet with nothing left hanging), **in progress** (working now, or anything in the last 2h),
+**stalled** (real work, quiet 2h+, and a named reason: waiting on you, usage limit, uncommitted
+edits, or it ended on a question) and **dipped into** (3 prompts or fewer, no edits). **export PDF**
+saves HTML + PDF to `~/.athena/reports` and opens it.
+
+Nothing is recorded for it. `scripts/report.mjs` derives everything from the Claude transcripts of
+both accounts, git, and `~/.athena/state`, because the state files are overwritten per event and
+hold no history. A project is the repo of the files a session edited, never its cwd, since almost
+every instance runs from the GitHub root. The one-line summaries come from a single
+`claude -p --model haiku --no-session-persistence --setting-sources ''` call, cached by input in
+`~/.athena/reports/summaries.json`; if it fails the report falls back to session titles.
+
+`scripts/install-desktop.sh` also installs `athena-report.timer`, which saves the last 24h at
+23:55 every night. The rules are pinned by `node scripts/report.test.mjs`.
