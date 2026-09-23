@@ -73,6 +73,8 @@ fn main() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_detach,
+            pty::pty_refresh,
+            pty::ui_log,
             clipboard::primary_read,
             clipboard::primary_write
         ])

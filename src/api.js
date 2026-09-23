@@ -150,6 +150,12 @@ export const ptyResize = (id, cols, rows) => invoke('pty_resize', { id, cols, ro
 /** Kill the attach client only; the tmux session and the agent inside it live on. */
 export const ptyDetach = (id) => invoke('pty_detach', { id });
 
+/** Ask tmux to repaint this instance's attach client in full. */
+export const ptyRefresh = (id) => invoke('pty_refresh', { id });
+
+/** Append a line to ~/.athena/ui.log, the webview's only durable log in a release build. */
+export const uiLog = (line) => invoke('ui_log', { line }).catch(() => {});
+
 /** Subscribe to one instance's pty output. Resolves to an unlisten function. */
 export const onPty = (id, fn) => listen(`pty:${id}`, (e) => fn(e.payload));
 

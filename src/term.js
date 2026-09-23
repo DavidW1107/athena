@@ -8,7 +8,7 @@ import '@xterm/xterm/css/xterm.css';
 
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
 
-import { onPty, primaryRead, primaryWrite, ptyAttach, ptyDetach, ptyResize, ptyWrite } from './api.js';
+import { onPty, primaryRead, primaryWrite, ptyAttach, ptyDetach, ptyRefresh, ptyResize, ptyWrite, uiLog } from './api.js';
 
 // Kept in step with the tokens in style.css. xterm needs literal colours (it paints to a
 // canvas and cannot read a CSS custom property), so this is the one place a hex is allowed.
@@ -163,6 +163,50 @@ export function createTerm(mountEl, opts = {}) {
     });
   }
 
+  // ---------------------------------------------------------------- write-queue guard
+
+  // xterm 5.5's WriteBuffer only schedules a flush when a write lands on an EMPTY queue. If
+  // parsing one chunk throws, the flush loop dies with that chunk still queued, and from then
+  // on every write just appends: the tile freezes on its last frame for good, while resizes
+  // (a separate path) keep working. That is the "frozen tile" seen 2026-09-23: tmux still
+  // delivering, Rust still reading, nothing drawn until Athena restarted.
+  //
+  // Two layers. The wrapper stops the wedge at source: a chunk that throws is logged with its
+  // bytes, skipped, and the tile repainted by tmux. The watchdog covers any other way the
+  // queue can stall: no progress for two ticks means kick the flush and repaint.
+  // ponytail: reaches into xterm privates (_core._writeBuffer); pinned to 5.5, re-check on upgrade.
+  const wb = term._core?._writeBuffer;
+  const repaint = () => attachedId && ptyRefresh(attachedId).catch(() => {});
+  let watchdog = null;
+  if (wb && typeof wb._action === 'function' && typeof wb._innerWrite === 'function') {
+    const parse = wb._action;
+    wb._action = (data, promiseResult) => {
+      try {
+        return parse(data, promiseResult);
+      } catch (err) {
+        uiLog(`parse threw on ${attachedId}: ${err} @ ${err?.stack} chunk=${JSON.stringify(String(data).slice(0, 600))}`);
+        repaint();
+        return undefined; // treated as a finished sync write, so the loop moves on
+      }
+    };
+    let lastOffset = -1;
+    let lastLen = -1;
+    watchdog = setInterval(() => {
+      const queued = wb._writeBuffer.length > wb._bufferOffset;
+      if (queued && wb._bufferOffset === lastOffset && wb._writeBuffer.length >= lastLen) {
+        uiLog(`write queue stalled on ${attachedId}: ${wb._writeBuffer.length - wb._bufferOffset} chunks, ${wb._pendingData} bytes; kicked`);
+        lastOffset = -1;
+        wb._innerWrite();
+        repaint();
+        return;
+      }
+      lastOffset = queued ? wb._bufferOffset : -1;
+      lastLen = wb._writeBuffer.length;
+    }, 2000);
+  } else {
+    uiLog('xterm write buffer internals changed; write-queue guard is off');
+  }
+
   /**
    * Re-measure AND tell the pty, which are two different things.
    *
@@ -240,6 +284,7 @@ export function createTerm(mountEl, opts = {}) {
     if (disposed) return Promise.resolve();
     disposed = true;
     ro.disconnect();
+    clearInterval(watchdog);
     if (unlisten) {
       unlisten();
       unlisten = null;

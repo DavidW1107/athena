@@ -118,6 +118,40 @@ pub fn pty_resize(ptys: State<PtyStore>, id: String, cols: u16, rows: u16) -> Re
         .map_err(|e| e.to_string())
 }
 
+/// Make tmux repaint this attach client's whole screen, without resizing the pane (a resize
+/// would also make the agent redraw). term.js calls it after skipping a chunk it could not
+/// parse, since whatever that chunk drew is now missing from the tile. The client is found by
+/// the attach child's pid because portable-pty does not expose the slave tty name.
+#[tauri::command]
+pub fn pty_refresh(ptys: State<PtyStore>, id: String) -> Result<(), String> {
+    let pid = {
+        let map = ptys.0.lock().map_err(|e| e.to_string())?;
+        map.get(&id).ok_or("not attached")?.child.process_id().ok_or("attach client has no pid")?
+    };
+    let out = crate::tmux::tmux(&["list-clients", "-F", "#{client_pid} #{client_name}"]).ok_or("tmux list-clients failed")?;
+    let pid = pid.to_string();
+    let name = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.split_once(' ').filter(|(p, _)| *p == pid).map(|(_, n)| n.to_string()))
+        .ok_or("attach client not found in tmux")?;
+    crate::tmux::tmux_run(&["refresh-client", "-t", &name])
+}
+
+/// Append one line to ~/.athena/ui.log. The webview's console goes nowhere in a release
+/// build, so this is the only way a frontend failure leaves evidence behind.
+#[tauri::command]
+pub fn ui_log(line: String) -> Result<(), String> {
+    use std::fs::OpenOptions;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(crate::util::athena_dir().join("ui.log"))
+        .map_err(|e| e.to_string())?;
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    // ponytail: unbounded append; rotate if it ever grows past a few MB.
+    writeln!(f, "{} {}", ts, line.chars().take(4000).collect::<String>()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn pty_detach(ptys: State<PtyStore>, id: String) -> Result<(), String> {
     let mut map = ptys.0.lock().map_err(|e| e.to_string())?;
