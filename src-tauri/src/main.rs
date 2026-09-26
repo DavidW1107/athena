@@ -44,6 +44,7 @@ fn main() {
             registry::tmux_scroll,
             registry::end_scroll,
             registry::restore,
+            registry::send_to_desk,
             registry::close,
             registry::set_paused,
             registry::send_text,

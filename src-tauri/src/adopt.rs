@@ -134,6 +134,7 @@ pub fn adopt_session(session: String, name: String, host: Option<String>) -> Res
         session_id: None,
         account: None,
         created: now(),
+        parked: None,
     })
 }
 
@@ -351,6 +352,7 @@ pub fn adopt_process(pid: i32, name: String) -> Result<InstanceView, String> {
         session_id: None,
         account: None,
         created: now(),
+        parked: None,
     })
 }
 

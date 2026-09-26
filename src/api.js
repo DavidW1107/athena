@@ -21,6 +21,8 @@ export const STATE_LABEL = {
   dead: 'not running',
   ended: 'ended',
   paused: 'paused',
+  // Brought home from the desktop by desk-down and not resumed: no process, no load.
+  parked: 'parked',
   // Hit a usage limit. accounts.rs moves it to an account with allowance left within seconds;
   // it stays in this state only while every account is out.
   limited: 'limit hit',
@@ -38,6 +40,7 @@ export const STATE_COLOR = {
   dead: 'var(--dead)',
   ended: 'var(--dead)',
   paused: 'var(--paused)',
+  parked: 'var(--paused)',
   limited: 'var(--dead)',
   held: 'var(--held)',
 };
@@ -72,6 +75,9 @@ export const endScroll = (id) => invoke('end_scroll', { id });
 
 /** Re-create a dead tmux session, resuming its Claude conversation when one is known. */
 export const restore = (id) => invoke('restore', { id });
+
+/** Move laptop instances to the desktop and resume them there; no ids = every parked one. */
+export const sendToDesk = (ids = []) => invoke('send_to_desk', { ids });
 
 /** Kill the tmux session, drop the hook state file, and forget the instance. */
 export const closeInstance = (id) => invoke('close', { id });

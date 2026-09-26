@@ -29,6 +29,11 @@ pub struct Instance {
     pub host: Option<String>,
     #[serde(default)]
     pub created: u64,
+    /// Brought home from the desktop by desk-down and deliberately not resumed: no tmux session,
+    /// zero load here. Holds the state it was in ("working" or "idle"), so whichever side
+    /// resumes it knows to tell claude to carry on. Cleared by a restore or a desk-up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked: Option<String>,
 }
 
 pub fn reg_path() -> PathBuf {
@@ -223,6 +228,7 @@ pub struct InstanceView {
     pub session_id: Option<String>,
     pub account: Option<String>,
     pub host: Option<String>,
+    pub parked: Option<String>,
     pub alive: bool,
     pub paused: bool,
     pub state: String,
@@ -270,7 +276,9 @@ pub fn list_instances() -> Vec<InstanceView> {
             dirty = true;
         }
         let paused = pane.map(|p| crate::tmux::is_frozen_on(host.as_deref(), p)).unwrap_or(false);
-        let state = if !alive {
+        let state = if !alive && inst.parked.is_some() {
+            "parked".to_string()
+        } else if !alive {
             "dead".to_string()
         } else if paused {
             "paused".to_string()
@@ -287,6 +295,7 @@ pub fn list_instances() -> Vec<InstanceView> {
             session_id: inst.session_id.clone(),
             account: inst.account.clone(),
             host: host.clone(),
+            parked: inst.parked.clone(),
             alive,
             paused,
             state,
@@ -387,7 +396,7 @@ pub fn launch_in(
         .map(|o| o.status.success())
         .unwrap_or(false);
 
-    let inst = Instance { id, name, cwd, group, cmd, session_id: None, account: Some(account), host: host.clone(), created: now() };
+    let inst = Instance { id, name, cwd, group, cmd, session_id: None, account: Some(account), host: host.clone(), created: now(), parked: None };
     let mut reg = read_reg();
     reg.push(inst.clone());
     write_reg(&reg);
@@ -432,6 +441,10 @@ pub fn restore(id: String) -> Result<(), String> {
     clear_state_on(hostref, &id);
 
     let line = match (&inst.session_id, inst.cmd.as_str()) {
+        // A session parked mid-task gets told so, or it sits at the prompt looking finished.
+        (Some(sid), c) if c.starts_with("claude") && inst.parked.as_deref() == Some("working") => {
+            format!("claude --resume {} '{}'", sid, PARKED_CARRY_ON)
+        }
         (Some(sid), c) if c.starts_with("claude") => format!("claude --resume {}", sid),
         _ => inst.cmd.clone(),
     };
@@ -440,7 +453,35 @@ pub fn restore(id: String) -> Result<(), String> {
     if !crate::tmux::tmux_on(hostref, &["send-keys", "-t", &sess, &line, "Enter"]).map(|o| o.status.success()).unwrap_or(false) {
         return Err(format!("the session was recreated but `{}` could not be sent to it", line));
     }
+    if inst.parked.is_some() {
+        let mut reg = read_reg();
+        if let Some(i) = reg.iter_mut().find(|i| i.id == id) {
+            i.parked = None;
+            write_reg(&reg);
+        }
+    }
     Ok(())
+}
+
+const PARKED_CARRY_ON: &str =
+    "This session was moved from the desktop to the laptop mid-task. Carry on from where you stopped.";
+
+/// Send laptop instances to the desktop and resume them there: every parked one when `ids` is
+/// empty. The move itself (stop, rsync the tree and transcript, flip the host, resume) lives in
+/// scripts/desk-down.py as `desk-up`, the same code the terminal runs, so there is one
+/// implementation of it. Async so the rsync never blocks the UI thread.
+#[tauri::command]
+pub async fn send_to_desk(ids: Vec<String>) -> Result<String, String> {
+    if ids.iter().any(|i| !i.chars().all(|c| c.is_ascii_alphanumeric())) {
+        return Err("not an instance id".into());
+    }
+    let script = home().join(".local/bin/desk-up");
+    let out = std::process::Command::new(&script)
+        .args(&ids)
+        .output()
+        .map_err(|e| format!("{} did not run: {}", script.display(), e))?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    if out.status.success() { Ok(text) } else { Err(text) }
 }
 
 /// Kill the session and forget the instance, in that order, and only if the kill actually

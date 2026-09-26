@@ -8,7 +8,7 @@
 
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 
-import { pbuildResumeAll } from './api.js';
+import { pbuildResumeAll, sendToDesk, uiLog } from './api.js';
 import { hasNote } from './notes.js';
 import * as store from './store.js';
 import { mountAttention, mountCodex, mountCounts, mountSessions } from './cards.js';
@@ -92,6 +92,31 @@ store.subscribePressure((txt) => {
 });
 
 $('#resume-all').onclick = () => pbuildResumeAll().then(store.refreshPressure);
+
+// Parked sessions came home from the desktop with desk-down and are waiting to go back. One
+// button sends them all; it only exists while there is something parked.
+const toDesk = $('#to-desk');
+let sending = false;
+store.subscribe(({ instances }) => {
+  const n = instances.filter((i) => i.state === 'parked').length;
+  toDesk.hidden = n === 0 && !sending;
+  if (!sending) toDesk.textContent = `${n} parked to desk`;
+});
+toDesk.onclick = async () => {
+  sending = true;
+  toDesk.disabled = true;
+  toDesk.textContent = 'sending to desk…';
+  try {
+    await sendToDesk([]);
+  } catch (err) {
+    uiLog(`send to desk failed: ${err}`);
+    window.alert(`Some sessions did not move:\n\n${err}`);
+  } finally {
+    sending = false;
+    toDesk.disabled = false;
+    store.refresh();
+  }
+};
 
 // ------------------------------------------------------------------ notifications
 

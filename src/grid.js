@@ -8,7 +8,7 @@
 // That is also what makes "as many as I open" affordable: N groups means N ptys, not N
 // instances. The grid never shrinks a tile below a readable width; it scrolls instead.
 
-import { closeInstance, endScroll, ptyWrite, restore, setGroup, setPaused, stateLabel, tmuxScroll } from './api.js';
+import { closeInstance, endScroll, ptyWrite, restore, sendToDesk, setGroup, setPaused, stateLabel, tmuxScroll } from './api.js';
 import * as store from './store.js';
 import { effectiveState, getNote, prune as pruneNotes, setNote, subscribeNotes } from './notes.js';
 import { createTerm } from './term.js';
@@ -454,10 +454,10 @@ export function mountGrid(host, opts = {}) {
 
   function showMessage(tile, text, action) {
     tile.msg.replaceChildren(el('span', null, text));
-    if (action) {
-      const b = el('button', 'ghost', action.label);
+    for (const a of [action].flat().filter(Boolean)) {
+      const b = el('button', 'ghost', a.label);
       b.type = 'button';
-      b.onclick = action.run;
+      b.onclick = a.run;
       tile.msg.appendChild(b);
     }
     tile.msg.hidden = false;
@@ -733,6 +733,12 @@ export function mountGrid(host, opts = {}) {
   // them and a badge on every tab would be noise; a remote one names its host.
   const hostTag = (i) => (i.host ? ` · ${i.host}` : '');
 
+  const continueHere = (i) => () => restore(i.id).then(store.refresh);
+  const toDesk = (i) => () =>
+    sendToDesk([i.id])
+      .catch((err) => window.alert(`${i.name} did not move:\n\n${err}`))
+      .finally(store.refresh);
+
   function renderTile(tile) {
     const members = store
       .getInstances()
@@ -793,9 +799,18 @@ export function mountGrid(host, opts = {}) {
         };
         tile.actions.appendChild(b);
       };
-      if (!active.alive) btn('restore', () => restore(active.id).then(store.refresh));
+      if (active.parked && !active.alive) {
+        btn('continue here', continueHere(active), 'resume it on this laptop');
+        btn('to desk', toDesk(active), 'resume it on the desktop');
+      } else if (!active.alive) btn('restore', () => restore(active.id).then(store.refresh));
       else if (active.paused) btn('resume', () => setPaused(active.id, false).then(store.refresh));
       else btn('pause', () => setPaused(active.id, true).then(store.refresh));
+      // Any laptop claude can go to the desktop, parked or live; a live one is stopped here first.
+      if (active.alive && !active.host && active.cmd.startsWith('claude') && active.session_id) {
+        btn('to desk', () => {
+          if (window.confirm(`Stop ${active.name} here and resume it on the desktop?`)) toDesk(active)();
+        }, 'stop it here and resume it on the desktop');
+      }
       btn('close', () => {
         if (window.confirm(`Close ${active.name}?`)) closeInstance(active.id).then(store.refresh);
       }, 'kill the tmux session and forget the instance');
@@ -811,6 +826,11 @@ export function mountGrid(host, opts = {}) {
     if (active && active.alive) {
       tile.msg.hidden = true;
       tile.termHost.hidden = false;
+    } else if (active && active.parked) {
+      showMessage(tile, `${active.name} is parked: its conversation and files are here, nothing is running.`, [
+        { label: 'continue here', run: continueHere(active) },
+        { label: 'to desk', run: toDesk(active) },
+      ]);
     } else if (active) {
       showMessage(tile, `${active.name} is ${stateLabel(activeState)}.`, {
         label: 'restore',
