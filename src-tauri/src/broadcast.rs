@@ -12,7 +12,7 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 
-use crate::tmux::{pane_map, send_block, sess_name};
+use crate::tmux::sess_name;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct BroadcastResult {
@@ -45,19 +45,30 @@ pub fn send_many(ids: Vec<String>, text: String) -> Result<Vec<BroadcastResult>,
         return Err("no instances selected".into());
     }
 
-    let panes = pane_map();
+    // One pane map per machine the selection spans. A desk instance used to be reported as "not
+    // running" here, because only this laptop's sessions were ever looked up.
+    let reg_hosts: std::collections::HashMap<String, Option<String>> = crate::registry::read_reg()
+        .into_iter()
+        .map(|i| (i.id, i.host))
+        .collect();
+    let mut hosts: Vec<Option<String>> = ids.iter().map(|id| reg_hosts.get(id).cloned().flatten()).collect();
+    hosts.push(None);
+    hosts.sort();
+    hosts.dedup();
+    let panes_by_host = crate::tmux::pane_maps(&hosts);
     let mut seen: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
     for id in ids {
         if !seen.insert(id.clone()) {
             continue;
         }
+        let host = reg_hosts.get(&id).cloned().flatten();
         let sess = sess_name(&id);
-        if !panes.contains_key(&sess) {
+        if !panes_by_host.get(&host).map(|m| m.contains_key(&sess)).unwrap_or(false) {
             out.push(BroadcastResult::err(id, "not running".into()));
             continue;
         }
-        let sent = send_block(&sess, &id, text);
+        let sent = crate::tmux::send_block_on(host.as_deref(), &sess, &id, text);
         out.push(match sent {
             Ok(()) => BroadcastResult::ok(id),
             Err(e) => BroadcastResult::err(id, e),

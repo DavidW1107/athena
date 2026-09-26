@@ -197,11 +197,14 @@ export const sendMany = (ids, text) => invoke('send_many', { ids, text });
 export const sessionUsage = (cwd, sessionId, host = null) =>
   invoke('session_usage', { cwd, sessionId, host });
 
+/** 5-hour and weekly windows per Claude account and Codex, cached server-side for 5 min. */
+export const accountLimits = () => invoke('account_limits');
+
 // ------------------------------------------------------------------ handoff
 
 /** The last `count` real user/assistant messages of a transcript, oldest first. */
-export const transcriptTail = (cwd, sessionId, count) =>
-  invoke('transcript_tail', { cwd, sessionId, count });
+export const transcriptTail = (cwd, sessionId, count, host = null) =>
+  invoke('transcript_tail', { cwd, sessionId, count, host });
 
 /** Paste one block into the target instance as a single prompt and submit it once. */
 export const handoffSend = (sourceId, targetId, text) =>

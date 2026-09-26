@@ -126,6 +126,8 @@ export function mountHandoff(host, opts = {}) {
       name: src.name,
       cwd: src.cwd,
       sessionId: src.session_id,
+      // Which machine wrote the transcript being read; null is this laptop.
+      host: src.host || null,
       count,
       key: `${src.id}|${src.cwd}|${src.session_id}|${count}`,
     };
@@ -217,7 +219,7 @@ export function mountHandoff(host, opts = {}) {
 
     let rows;
     try {
-      rows = await transcriptTail(ident.cwd, ident.sessionId, ident.count);
+      rows = await transcriptTail(ident.cwd, ident.sessionId, ident.count, ident.host || null);
     } catch (err) {
       if (dead || my !== gen) return;
       loading = false;
@@ -285,7 +287,7 @@ export function mountHandoff(host, opts = {}) {
     // would deliver a stale tail while the UI claimed it had sent the last n messages.
     let fresh;
     try {
-      fresh = await transcriptTail(ident.cwd, ident.sessionId, ident.count);
+      fresh = await transcriptTail(ident.cwd, ident.sessionId, ident.count, ident.host || null);
     } catch (err) {
       if (dead) return;
       sending = false;

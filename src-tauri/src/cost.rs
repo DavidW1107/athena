@@ -47,7 +47,7 @@ pub struct UsageSummary {
 ///
 /// A remote file SHORTER than the mirror is not an append: the session was rewritten or the id was
 /// reused, so the mirror is thrown away and refetched whole rather than parsed as a spliced file.
-fn mirror_transcript(host: &str, rel: &str) -> Result<std::path::PathBuf, String> {
+pub fn mirror_transcript(host: &str, rel: &str) -> Result<std::path::PathBuf, String> {
     let local = crate::util::athena_dir().join("cache").join("transcripts").join(host).join(rel);
     if let Some(dir) = local.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("could not make the mirror directory: {}", e))?;

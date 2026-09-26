@@ -31,7 +31,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::sessions::project_slug;
-use crate::tmux::{send_block, sess_name, tmux_alive};
+use crate::tmux::sess_name;
 use crate::util::home;
 
 /// Upper bound on a tail request. The picker offers 1-40; this is the backstop.
@@ -247,6 +247,7 @@ pub fn transcript_tail(
     cwd: String,
     session_id: String,
     count: usize,
+    host: Option<String>,
 ) -> Result<Vec<TranscriptMessage>, String> {
     if session_id.is_empty()
         || session_id.contains('/')
@@ -256,11 +257,17 @@ pub fn transcript_tail(
         return Err("bad session id".into());
     }
     let count = count.clamp(1, MAX_MESSAGES);
-    let path: PathBuf = home()
-        .join(".claude")
-        .join("projects")
-        .join(project_slug(&cwd))
-        .join(format!("{}.jsonl", session_id));
+    // A desk instance's transcript is on the desk. The same incremental mirror the usage meter
+    // uses serves it here, so handing off FROM a remote instance reads its real conversation
+    // rather than failing on a path this laptop does not have.
+    let path: PathBuf = match host.as_deref().filter(|h| !h.trim().is_empty()) {
+        None => home()
+            .join(".claude")
+            .join("projects")
+            .join(project_slug(&cwd))
+            .join(format!("{}.jsonl", session_id)),
+        Some(h) => crate::cost::mirror_transcript(h, &format!("{}/{}.jsonl", project_slug(&cwd), session_id))?,
+    };
 
     let file = File::open(&path).map_err(|e| format!("cannot read transcript: {}", e))?;
     let mut tail: VecDeque<TranscriptMessage> = VecDeque::with_capacity(count + 1);
@@ -318,12 +325,14 @@ pub fn handoff_send(source_id: String, target_id: String, text: String) -> Resul
     if source_id == target_id {
         return Err("source and target must be different instances".into());
     }
+    let host = crate::registry::instance_host(&target_id);
+    let hostref = host.as_deref();
     let sess = sess_name(&target_id);
-    if !tmux_alive(&sess) {
+    if !crate::tmux::tmux_alive_on(hostref, &sess) {
         return Err("target instance is not running".into());
     }
 
-    send_block(&sess, &target_id, text)
+    crate::tmux::send_block_on(hostref, &sess, &target_id, text)
 }
 
 #[cfg(test)]

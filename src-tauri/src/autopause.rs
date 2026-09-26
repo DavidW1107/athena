@@ -418,7 +418,13 @@ fn probe(id: &str) -> Option<Live> {
     let host = crate::registry::instance_host(id);
     let hostref = host.as_deref();
     let pane = crate::tmux::pane_map_on(hostref).get(&sess_name(id)).copied()?;
-    Some(Live { pane, stopped: crate::tmux::is_frozen_on(hostref, pane), hook: state_of(id, hostref).state })
+    Some(Live {
+        pane,
+        stopped: crate::tmux::is_frozen_on(hostref, pane),
+        // Fresh, never the poll's memo: this is the read that authorises a freeze, and a
+        // 700ms-old `idle` can describe a session that has since started a turn.
+        hook: crate::registry::fresh_state_on(hostref, id).state,
+    })
 }
 
 /// Hook state for one instance, from the machine whose hook writes it.
@@ -712,6 +718,15 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
         v
     };
     let panes_by_host = crate::tmux::pane_maps(&hosts_in_use);
+    // Which machines actually answered. A host that is off returns an empty pane map, and that is
+    // the absence of evidence, not evidence of absence: treating it as proof the pane died would
+    // drop the ownership record for a cgroup that is still frozen, leaving nothing authorised to
+    // thaw it when the machine comes back.
+    let answered: std::collections::HashSet<Option<String>> = hosts_in_use
+        .iter()
+        .filter(|h| h.is_none() || crate::hosts::reachable(h.as_deref()))
+        .cloned()
+        .collect();
     let host_of: HashMap<String, Option<String>> =
         reg.iter().map(|i| (i.id.clone(), i.host.clone())).collect();
     let selected = selected_now();
@@ -721,6 +736,9 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
     for id in owned.keys().cloned().collect::<Vec<_>>() {
         let e = owned[&id].clone();
         let h = host_of.get(&id).cloned().flatten();
+        if !answered.contains(&h) {
+            continue; // its machine is unreachable; hold the record until it can be checked
+        }
         let gone = match panes_by_host.get(&h).and_then(|m| m.get(&sess_name(&id))).copied() {
             None => true,
             Some(pid) => {
@@ -793,6 +811,9 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
     // park genuinely idle instances to give the busy ones room. A second layer, not the fix for a
     // session spawning duplicate jobs; the PreToolUse duplicate guard is that.
     for host in &hosts_in_use {
+        if !answered.contains(host) {
+            continue;
+        }
         let hr = host.as_deref();
         let empty = HashMap::new();
         let host_panes = panes_by_host.get(host).unwrap_or(&empty);

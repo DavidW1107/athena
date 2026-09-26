@@ -36,7 +36,17 @@ pub fn command(host: Host, prog: &str, args: &[&str]) -> Command {
             // runs every second and a prompt nobody can answer would wedge the whole fleet.
             // ConnectTimeout: the desktop is allowed to be off. A call to a machine that is not
             // there has to fail inside one poll and read as "not running", not hang.
-            c.args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=4", h]);
+            // ConnectTimeout bounds only the handshake. A link that disappears AFTER the channel is
+            // up, or a stalled ControlMaster, would otherwise block `output()` for ever while the
+            // one-second poll keeps queuing more calls behind it. The keepalive probes give every
+            // established connection a deadline too: two missed probes, ~10s, and ssh gives up.
+            c.args([
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=4",
+                "-o", "ServerAliveInterval=5",
+                "-o", "ServerAliveCountMax=2",
+                h,
+            ]);
             let mut line = sh_quote(prog);
             for a in args {
                 line.push(' ');

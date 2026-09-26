@@ -86,7 +86,17 @@ for f in *.json; do
 '
 done"#;
     let mut out = HashMap::new();
-    if let Some(o) = hosts::run(host, "sh", &["-c", script]) {
+    let Some(o) = hosts::run(host, "sh", &["-c", script]).filter(|o| o.status.success()) else {
+        // Unreachable or refused. Caching this as "no marks" would let the next choose() treat a
+        // spent account as available, so the last known answer is kept instead: a stale mark only
+        // ever delays a launch, an absent one sends it into a wall.
+        return cache
+            .lock()
+            .ok()
+            .and_then(|c| c.get(h).map(|(_, v)| v.clone()))
+            .unwrap_or_default();
+    };
+    {
         for line in String::from_utf8_lossy(&o.stdout).lines() {
             if let Some((acct, json)) = line.split_once('\t') {
                 if let Some(until) = serde_json::from_str::<serde_json::Value>(json)
@@ -111,7 +121,11 @@ done"#;
 /// trusting only this laptop's copy would have Athena launch straight into an account the desktop
 /// already knows is spent.
 fn limited_until(acct: &str) -> Option<u64> {
+    // Every DECLARED machine, not just the ones with an instance right now: closing the last desk
+    // instance must not retire a limit mark that is still in force, or the next launch walks
+    // straight into a subscription the desktop already knows is spent.
     let mut hosts_seen: Vec<Option<String>> = read_reg().into_iter().map(|i| i.host).collect();
+    hosts_seen.extend(hosts::list_hosts().into_iter().map(Some));
     hosts_seen.push(None);
     hosts_seen.sort();
     hosts_seen.dedup();
@@ -119,12 +133,22 @@ fn limited_until(acct: &str) -> Option<u64> {
 }
 
 /// `pref` if it has allowance, else the first account that does, else None.
+///
+/// An account at `limits::PREEMPT` of either window counts as spent too, so a launch or a move
+/// skips it before it hits the wall. When every account is that full, the hard marks alone decide,
+/// since a nearly-full account still beats waiting for a reset.
 pub fn choose(pref: &str) -> Option<String> {
     let all = accounts();
-    if all.iter().any(|a| a == pref) && limited_until(pref).is_none() {
+    let ok = |a: &str| limited_until(a).is_none();
+    let roomy = |a: &str| ok(a) && !crate::limits::nearly_out(a);
+    if all.iter().any(|a| a == pref) && roomy(pref) {
         return Some(pref.to_string());
     }
-    all.into_iter().find(|a| limited_until(a).is_none())
+    all.iter()
+        .find(|a| roomy(a))
+        .or_else(|| all.iter().find(|a| a.as_str() == pref && ok(a)))
+        .or_else(|| all.iter().find(|a| ok(a)))
+        .cloned()
 }
 
 /// The shell line that runs `line` on `acct`. Only a claude line is touched.
@@ -150,10 +174,9 @@ pub fn watch() {
     let mut next: HashMap<String, u64> = HashMap::new();
     loop {
         std::thread::sleep(Duration::from_secs(1));
+        // Not filtered on `cmd`: a bash tile where claude was typed by hand reports `limited` just
+        // the same, and only the claude hook ever writes that state.
         for inst in read_reg() {
-            if !inst.cmd.starts_with("claude") {
-                continue;
-            }
             let hs = match &inst.host {
                 None => read_state(&inst.id),
                 Some(h) => states_for(h).get(&inst.id).cloned().unwrap_or_default(),
@@ -218,7 +241,13 @@ fn move_to(id: &str, from: &str, to: &str, sid: &str) -> Result<(), String> {
     // A limited instance is idle, which is exactly what auto-pause freezes, and a frozen claude
     // can act on no signal. Thaw first; the resumed session is live work again anyway.
     let _ = crate::tmux::set_frozen_on(hostref, pane, false);
-    let kids = hosts::run(hostref, "pgrep", &["-P", &pane.to_string(), "-x", "claude"])
+    // Every claude on the pane's terminal, not just children of the pane process: one typed into a
+    // nested shell (`bash` then `claude`) is a grandchild and `pgrep -P` walked straight past it.
+    let tty = crate::tmux::tmux_on(hostref, &["display-message", "-p", "-t", &sess, "#{pane_tty}"])
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().trim_start_matches("/dev/").to_string())
+        .filter(|t| !t.is_empty())
+        .ok_or("no pane tty")?;
+    let kids = hosts::run(hostref, "pgrep", &["-t", &tty, "-x", "claude"])
         .ok_or_else(|| format!("pgrep did not run on {}", hostref.unwrap_or("this machine")))?;
     let pids: Vec<i32> = String::from_utf8_lossy(&kids.stdout).lines().filter_map(|l| l.trim().parse().ok()).collect();
     // No claude left (it exited or crashed after the limit) is fine: the shell check below still

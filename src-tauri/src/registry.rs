@@ -64,7 +64,13 @@ pub fn read_reg() -> Vec<Instance> {
 pub fn write_reg(v: &[Instance]) {
     let Ok(s) = serde_json::to_string_pretty(v) else { return };
     let path = reg_path();
-    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
+    // pid AND a clock reading: the app and its own background watcher both write this file, and a
+    // shared temp name means one rename can publish the other's half-written copy.
+    let tmp = path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+    ));
     if fs::write(&tmp, s).is_err() {
         let _ = fs::remove_file(&tmp);
         return;
@@ -111,6 +117,16 @@ pub fn read_state(id: &str) -> HookState {
 /// this they would each pay their own round trip for the same answer. The TTL is deliberately
 /// shorter than a poll interval is long, so nothing ever reads state older than it would have
 /// fetched anyway.
+pub fn fresh_state_on(host: crate::hosts::Host, id: &str) -> HookState {
+    match host {
+        None => read_state(id),
+        // Deliberately NOT states_for: this is the read that decides whether freezing an agent is
+        // safe, and a 700ms-old `idle` can describe a session that has since started a turn.
+        // Freezing mid-turn kills the API call, so this one pays for its own round trip.
+        Some(h) => remote_states(h).get(id).cloned().unwrap_or_default(),
+    }
+}
+
 pub fn states_for(host: &str) -> std::collections::HashMap<String, HookState> {
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
@@ -280,7 +296,19 @@ pub fn list_instances() -> Vec<InstanceView> {
         });
     }
     if dirty {
-        write_reg(&reg);
+        // Merge, never overwrite. This function reads the registry, then spends hundreds of
+        // milliseconds on ssh calls, so by now the account watcher may have written a newer
+        // account for one of these instances. Writing `reg` wholesale would put that back.
+        let mut latest = read_reg();
+        for inst in &reg {
+            if let Some(cur) = latest.iter_mut().find(|i| i.id == inst.id) {
+                cur.session_id = inst.session_id.clone();
+                if cur.account.is_none() {
+                    cur.account = inst.account.clone();
+                }
+            }
+        }
+        write_reg(&latest);
     }
     out
 }
@@ -424,6 +452,16 @@ pub fn close(id: String) -> Result<(), String> {
     let host = instance_host(&id);
     let hostref = host.as_deref();
     let sess = sess_name(&id);
+    // An unreachable host fails both the kill AND the liveness check that guards it, and the two
+    // failures together would read as "nothing is running, safe to forget". Forgetting a remote
+    // instance whose tmux session is still alive orphans an agent that keeps editing a repository
+    // with no route back to it, so an unreachable host refuses the close outright.
+    if !crate::hosts::reachable(hostref) {
+        return Err(format!(
+            "{} is not reachable, so nothing was closed; its session may still be running",
+            hostref.unwrap_or("this machine")
+        ));
+    }
     match crate::tmux::tmux_on(hostref, &["kill-session", "-t", &sess]) {
         // tmux is not reachable at all, so nothing was killed and nothing may be forgotten.
         None => return Err("tmux is not on PATH; nothing was closed".into()),
@@ -469,8 +507,7 @@ pub fn send_text(id: String, text: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn send_key(id: String, key: String) -> Result<(), String> {
-    crate::tmux::tmux_on(instance_host(&id).as_deref(), &["send-keys", "-t", &sess_name(&id), &key]);
-    Ok(())
+    crate::tmux::tmux_run_on(instance_host(&id).as_deref(), &["send-keys", "-t", &sess_name(&id), &key])
 }
 
 /// Two levels under the GitHub root, which is exactly how the buckets are laid out
@@ -499,7 +536,7 @@ pub fn list_repos_on(host: Option<String>) -> Vec<String> {
     let Some(h) = host.filter(|h| !h.trim().is_empty()) else { return list_repos() };
     let script = r#"root="$HOME/Documents/GitHub"
 [ -d "$root" ] || exit 0
-find "$root" -mindepth 1 -maxdepth 2 -type d \
+find -H "$root" -mindepth 1 -maxdepth 2 -type d \
   -not -path '*/.*' -not -name node_modules -not -path '*/node_modules/*' | sort"#;
     crate::hosts::run(Some(&h), "sh", &["-c", script])
         .filter(|o| o.status.success())
