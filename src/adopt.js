@@ -195,10 +195,10 @@ export function mountAdopt({ dialog, openBtn, onAdopted }) {
     for (const s of sessions) {
       tmuxSection.appendChild(
         row(
-          s.session,
-          `${s.command} in ${s.cwd}${s.attached ? ', attached elsewhere' : ''}`,
+          s.host ? `${s.session} · ${s.host}` : s.session,
+          `${s.command} in ${s.cwd}${s.host ? ` on ${s.host}` : ''}${s.attached ? ', attached elsewhere' : ''}`,
           'adopt',
-          () => adopt(() => adoptSession(s.session, ''), s.session)
+          () => adopt(() => adoptSession(s.session, '', s.host || null), s.session)
         )
       );
     }

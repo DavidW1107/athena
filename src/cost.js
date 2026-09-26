@@ -105,7 +105,7 @@ export function mountCost(host, opts = {}) {
       error: fresh ? prior.error : null,
     };
     records.set(inst.id, rec);
-    sessionUsage(inst.cwd, inst.session_id)
+    sessionUsage(inst.cwd, inst.session_id, inst.host || null)
       .then((summary) => {
         rec.summary = summary;
         rec.error = null;

@@ -12,12 +12,12 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::process::Command;
 use std::time::Duration;
 
 use crate::adopt::terminate_and_wait;
-use crate::registry::{read_reg, read_state, write_reg};
-use crate::tmux::{pane_pid, send_block, sess_name, tmux};
+use crate::hosts::{self, Host};
+use crate::registry::{instance_host, read_reg, read_state, states_for, write_reg};
+use crate::tmux::sess_name;
 use crate::util::{athena_dir, home, now};
 
 const MOVED: &str = "Your last turn was cut off by a usage limit, so Athena moved this session to \
@@ -46,11 +46,76 @@ pub fn accounts() -> Vec<String> {
     v
 }
 
-/// Out of usage until this epoch, per the hook's mark; None once the reset has passed.
-fn limited_until(acct: &str) -> Option<u64> {
-    let text = fs::read_to_string(athena_dir().join("accounts").join(format!("{}.json", acct))).ok()?;
-    let until = serde_json::from_str::<serde_json::Value>(&text).ok()?.get("until")?.as_u64()?;
+/// The mark one machine wrote for one account, ignoring a reset that has already passed.
+fn mark_until(host: Host, acct: &str) -> Option<u64> {
+    let until = match host {
+        None => {
+            let text = fs::read_to_string(athena_dir().join("accounts").join(format!("{}.json", acct))).ok()?;
+            serde_json::from_str::<serde_json::Value>(&text).ok()?.get("until")?.as_u64()?
+        }
+        Some(_) => remote_marks(host).get(acct).copied()?,
+    };
     (until > now()).then_some(until)
+}
+
+/// Every account mark on a remote host, in one ssh call, memoised for a few seconds.
+///
+/// `choose` is called from a one-second loop, so an uncached read here would be a round trip per
+/// account per second. A reset time is minutes away when it is set, so seconds of staleness cost
+/// nothing.
+fn remote_marks(host: Host) -> HashMap<String, u64> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, HashMap<String, u64>)>>> = OnceLock::new();
+    let Some(h) = host else { return HashMap::new() };
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(c) = cache.lock() {
+        if let Some((at, v)) = c.get(h) {
+            if at.elapsed() < Duration::from_secs(5) {
+                return v.clone();
+            }
+        }
+    }
+    let script = r#"cd "$HOME/.athena/accounts" 2>/dev/null || exit 0
+for f in *.json; do
+  [ -e "$f" ] || continue
+  printf '%s	' "${f%.json}"
+  tr -d '
+' < "$f"
+  printf '
+'
+done"#;
+    let mut out = HashMap::new();
+    if let Some(o) = hosts::run(host, "sh", &["-c", script]) {
+        for line in String::from_utf8_lossy(&o.stdout).lines() {
+            if let Some((acct, json)) = line.split_once('\t') {
+                if let Some(until) = serde_json::from_str::<serde_json::Value>(json)
+                    .ok()
+                    .and_then(|v| v.get("until")?.as_u64())
+                {
+                    out.insert(acct.to_string(), until);
+                }
+            }
+        }
+    }
+    if let Ok(mut c) = cache.lock() {
+        c.insert(h.to_string(), (Instant::now(), out.clone()));
+    }
+    out
+}
+
+/// Out of usage until this epoch, per any machine's mark; None once every reset has passed.
+///
+/// A usage limit belongs to the subscription, not to a computer, so a limit the desktop ran into
+/// is just as true here. Marks are therefore unioned across the fleet and the LATEST reset wins:
+/// trusting only this laptop's copy would have Athena launch straight into an account the desktop
+/// already knows is spent.
+fn limited_until(acct: &str) -> Option<u64> {
+    let mut hosts_seen: Vec<Option<String>> = read_reg().into_iter().map(|i| i.host).collect();
+    hosts_seen.push(None);
+    hosts_seen.sort();
+    hosts_seen.dedup();
+    hosts_seen.iter().filter_map(|h| mark_until(h.as_deref(), acct)).max()
 }
 
 /// `pref` if it has allowance, else the first account that does, else None.
@@ -89,7 +154,10 @@ pub fn watch() {
             if !inst.cmd.starts_with("claude") {
                 continue;
             }
-            let hs = read_state(&inst.id);
+            let hs = match &inst.host {
+                None => read_state(&inst.id),
+                Some(h) => states_for(h).get(&inst.id).cloned().unwrap_or_default(),
+            };
             if hs.state.as_deref() != Some("limited") {
                 continue;
             }
@@ -114,30 +182,50 @@ pub fn watch() {
     }
 }
 
+/// Stop a process on whichever machine it runs on, TERM then KILL, exactly as the local version
+/// does: CONT so a stopped process can act on the TERM it is holding, three seconds of grace, then
+/// KILL, which cannot be blocked. A transcript is appended per message, so nothing written is lost.
+fn terminate_on(host: Host, pid: i32) -> bool {
+    match host {
+        None => terminate_and_wait(pid),
+        Some(_) => {
+            let script = format!(
+                r#"kill -TERM {pid} 2>/dev/null; kill -CONT {pid} 2>/dev/null
+for i in $(seq 1 30); do kill -0 {pid} 2>/dev/null || exit 0; sleep 0.1; done
+kill -KILL {pid} 2>/dev/null
+for i in $(seq 1 30); do kill -0 {pid} 2>/dev/null || exit 0; sleep 0.1; done
+exit 1"#,
+                pid = pid
+            );
+            hosts::run(host, "sh", &["-c", &script]).map(|o| o.status.success()).unwrap_or(false)
+        }
+    }
+}
+
 /// Resume `sid` on account `to`. Same account means its limit reset: just nudge the live session.
 fn move_to(id: &str, from: &str, to: &str, sid: &str) -> Result<(), String> {
+    let host = instance_host(id);
+    let hostref = host.as_deref();
     let sess = sess_name(id);
     if from == to {
-        return send_block(&sess, id, RESET);
+        return crate::tmux::send_block_on(hostref, &sess, id, RESET);
     }
     // The id becomes a shell argument, so it is checked rather than trusted.
     if sid.len() < 8 || !sid.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
         return Err(format!("not a session id: {}", sid));
     }
-    let pane = pane_pid(&sess).ok_or("no live pane")?;
+    let pane = crate::tmux::pane_pid_on(hostref, &sess).ok_or("no live pane")?;
     // A limited instance is idle, which is exactly what auto-pause freezes, and a frozen claude
     // can act on no signal. Thaw first; the resumed session is live work again anyway.
-    let _ = crate::tmux::set_frozen(pane, false);
-    let kids = Command::new("pgrep")
-        .args(["-P", &pane.to_string(), "-x", "claude"])
-        .output()
-        .map_err(|e| format!("pgrep: {}", e))?;
+    let _ = crate::tmux::set_frozen_on(hostref, pane, false);
+    let kids = hosts::run(hostref, "pgrep", &["-P", &pane.to_string(), "-x", "claude"])
+        .ok_or_else(|| format!("pgrep did not run on {}", hostref.unwrap_or("this machine")))?;
     let pids: Vec<i32> = String::from_utf8_lossy(&kids.stdout).lines().filter_map(|l| l.trim().parse().ok()).collect();
     // No claude left (it exited or crashed after the limit) is fine: the shell check below still
     // guards the typing, and refusing here would strand the instance at `limited` forever.
     // Stop BEFORE resuming: two processes appending to one transcript is the corruption to avoid.
     for pid in pids {
-        if !terminate_and_wait(pid) {
+        if !terminate_on(hostref, pid) {
             return Err(format!("claude {} did not exit, so it was not resumed elsewhere", pid));
         }
     }
@@ -146,7 +234,7 @@ fn move_to(id: &str, from: &str, to: &str, sid: &str) -> Result<(), String> {
     let is_shell = |c: &str| matches!(c, "bash" | "zsh" | "sh" | "fish");
     let mut fg = String::new();
     for _ in 0..20 {
-        fg = tmux(&["display-message", "-p", "-t", &sess, "#{pane_current_command}"])
+        fg = crate::tmux::tmux_on(hostref, &["display-message", "-p", "-t", &sess, "#{pane_current_command}"])
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_default();
         if is_shell(&fg) {
@@ -158,14 +246,14 @@ fn move_to(id: &str, from: &str, to: &str, sid: &str) -> Result<(), String> {
         return Err(format!("pane is running {} rather than a shell, so nothing was typed", fg));
     }
     // Stale `limited` would re-trigger the move; the resumed session writes its own state.
-    let _ = fs::remove_file(athena_dir().join("state").join(format!("{}.json", id)));
+    crate::registry::clear_state_on(hostref, id);
     let mut reg = read_reg();
     if let Some(i) = reg.iter_mut().find(|i| i.id == id) {
         i.account = Some(to.to_string());
         write_reg(&reg);
     }
     let line = on_account(to, &format!("claude --resume {} '{}'", sid, MOVED));
-    match tmux(&["send-keys", "-t", &sess, &line, "Enter"]) {
+    match crate::tmux::tmux_on(hostref, &["send-keys", "-t", &sess, &line, "Enter"]) {
         Some(o) if o.status.success() => Ok(()),
         _ => Err("claude was stopped but the resume could not be typed; restore it by hand".into()),
     }

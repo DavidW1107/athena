@@ -1,6 +1,7 @@
 // The JSON registry owns intent (what the user asked to exist); Claude Code hooks own
 // state (what it is doing right now). list_instances is the join of those two plus tmux.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -105,6 +106,31 @@ pub fn read_state(id: &str) -> HookState {
 /// cost a round trip per instance per second, so the whole directory comes back as one
 /// `id<TAB>json` line per file. A machine that is off yields nothing, which lands as the empty
 /// state an unreachable instance should have.
+/// Remote states with a short memo, because two loops want them: the fleet poll (once a second,
+/// to paint the tiles) and the account watcher (once a second, to notice a `limited`). Without
+/// this they would each pay their own round trip for the same answer. The TTL is deliberately
+/// shorter than a poll interval is long, so nothing ever reads state older than it would have
+/// fetched anyway.
+pub fn states_for(host: &str) -> std::collections::HashMap<String, HookState> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    type Cache = HashMap<String, (Instant, HashMap<String, HookState>)>;
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(c) = cache.lock() {
+        if let Some((at, v)) = c.get(host) {
+            if at.elapsed() < Duration::from_millis(700) {
+                return v.clone();
+            }
+        }
+    }
+    let fresh = remote_states(host);
+    if let Ok(mut c) = cache.lock() {
+        c.insert(host.to_string(), (Instant::now(), fresh.clone()));
+    }
+    fresh
+}
+
 fn remote_states(host: &str) -> std::collections::HashMap<String, HookState> {
     let script = r#"cd "$HOME/.athena/state" 2>/dev/null || exit 0
 for f in *.json; do
@@ -129,7 +155,7 @@ done"#;
 ///
 /// A stale record is read as live state: a restored session showing `working` from the run that
 /// died, a false needs-you, an auto-pause decision taken on a state nothing is producing.
-fn clear_state(host: crate::hosts::Host, id: &str) {
+pub fn clear_state_on(host: crate::hosts::Host, id: &str) {
     match host {
         None => {
             let _ = fs::remove_file(athena_dir().join("state").join(format!("{}.json", id)));
@@ -207,7 +233,7 @@ pub fn list_instances() -> Vec<InstanceView> {
     };
     let panes_by_host = crate::tmux::pane_maps(&hosts_in_use);
     let states_by_host: std::collections::HashMap<String, std::collections::HashMap<String, HookState>> =
-        hosts_in_use.iter().flatten().map(|h| (h.clone(), remote_states(h))).collect();
+        hosts_in_use.iter().flatten().map(|h| (h.clone(), states_for(h))).collect();
     for inst in reg.iter_mut() {
         let host = inst.host.clone();
         let sess = sess_name(&inst.id);
@@ -375,7 +401,7 @@ pub fn restore(id: String) -> Result<(), String> {
     // event, that stale record would be read as live state: a restored session showing `working`
     // from the previous run, a false needs-you notification, and an auto-pause decision taken on
     // a state nothing is producing any more.
-    clear_state(hostref, &id);
+    clear_state_on(hostref, &id);
 
     let line = match (&inst.session_id, inst.cmd.as_str()) {
         (Some(sid), c) if c.starts_with("claude") => format!("claude --resume {}", sid),
@@ -413,7 +439,7 @@ pub fn close(id: String) -> Result<(), String> {
         }
         _ => {}
     }
-    clear_state(hostref, &id);
+    clear_state_on(hostref, &id);
     let reg: Vec<Instance> = read_reg().into_iter().filter(|i| i.id != id).collect();
     write_reg(&reg);
     Ok(())

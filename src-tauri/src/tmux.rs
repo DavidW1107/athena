@@ -35,9 +35,6 @@ pub fn pane_pid_on(host: Host, sess: &str) -> Option<i32> {
     String::from_utf8_lossy(&o.stdout).lines().next()?.trim().parse().ok()
 }
 
-pub fn pane_pid(sess: &str) -> Option<i32> {
-    pane_pid_on(None, sess)
-}
 
 /// One tmux call per host: session name -> first pane pid.
 /// The poll runs every second, so per-instance `has-session` calls are not affordable.
@@ -91,9 +88,6 @@ pub fn is_frozen_on(host: Host, pane: i32) -> bool {
         .unwrap_or(false)
 }
 
-pub fn is_frozen(pane: i32) -> bool {
-    is_frozen_on(None, pane)
-}
 
 /// Pause or resume a pane by freezing its cgroup.
 ///
@@ -116,9 +110,6 @@ pub fn set_frozen_on(host: Host, pane: i32, on: bool) -> Result<(), String> {
         .map_err(|e| format!("could not write cgroup.freeze: {}", e))
 }
 
-pub fn set_frozen(pane: i32, on: bool) -> Result<(), String> {
-    set_frozen_on(None, pane, on)
-}
 
 pub fn git_group_on(host: Host, cwd: &str) -> String {
     let top = hosts::run(host, "git", &["-C", cwd, "rev-parse", "--show-toplevel"])

@@ -54,13 +54,28 @@ pub struct AdoptableSession {
     pub cwd: String,
     pub command: String,
     pub attached: bool,
+    /// Which machine it is running on; None is this laptop.
+    pub host: Option<String>,
 }
 
-/// Every tmux session Athena did not create. One tmux call for the whole list, because
-/// this is refreshed each time the adopt panel opens.
+/// Every tmux session Athena did not create, on this machine and on each machine ssh knows.
+///
+/// One tmux call per machine, because this is refreshed when the adopt panel opens rather than on a
+/// timer. A host that is off contributes nothing after its connect timeout, which is why the list
+/// is built per host instead of failing as a whole.
 #[tauri::command]
 pub fn list_adoptable_sessions() -> Vec<AdoptableSession> {
-    let Some(o) = tmux(&[
+    let mut out = Vec::new();
+    out.extend(adoptable_on(None));
+    for h in crate::hosts::list_hosts() {
+        out.extend(adoptable_on(Some(&h)));
+    }
+    out.sort_by(|a, b| (a.host.clone(), a.session.clone()).cmp(&(b.host.clone(), b.session.clone())));
+    out
+}
+
+fn adoptable_on(host: crate::hosts::Host) -> Vec<AdoptableSession> {
+    let Some(o) = crate::tmux::tmux_on(host, &[
         "list-panes",
         "-a",
         "-F",
@@ -84,6 +99,7 @@ pub fn list_adoptable_sessions() -> Vec<AdoptableSession> {
             attached: f[2] != "0",
             cwd: f[3].to_string(),
             command: f[4].to_string(),
+            host: host.map(|h| h.to_string()),
         });
     }
     out.sort_by(|a, b| a.session.cmp(&b.session));
@@ -93,25 +109,27 @@ pub fn list_adoptable_sessions() -> Vec<AdoptableSession> {
 /// Adopt by rename. `session` is checked against the live adoptable list rather than
 /// trusted from the UI, so a stale or invented name cannot rename something unexpected.
 #[tauri::command]
-pub fn adopt_session(session: String, name: String) -> Result<InstanceView, String> {
+pub fn adopt_session(session: String, name: String, host: Option<String>) -> Result<InstanceView, String> {
+    let host = host.filter(|h| !h.trim().is_empty());
+    // Matched on machine as well as name: two machines can each have a session called `work`, and
+    // renaming the wrong one would hand Athena a session the user is sitting in elsewhere.
     let found = list_adoptable_sessions()
         .into_iter()
-        .find(|s| s.session == session)
+        .find(|s| s.session == session && s.host == host)
         .ok_or("that tmux session is gone, or Athena already owns it")?;
+    let hostref = host.as_deref();
 
     let id = new_id();
-    tmux_run(&["rename-session", "-t", &session, &sess_name(&id)])
+    crate::tmux::tmux_run_on(hostref, &["rename-session", "-t", &session, &sess_name(&id)])
         .map_err(|e| format!("could not rename the session: {}", e))?;
 
     let display = if name.trim().is_empty() { found.session.clone() } else { name };
     register(Instance {
         id,
         name: display,
-        // Adoption takes over a session that is already running here, so it is local by
-        // definition. Adopting one on the desktop needs the dialog to list remote sessions first.
-        host: None,
+        host: host.clone(),
         cwd: found.cwd.clone(),
-        group: git_group(&found.cwd),
+        group: crate::tmux::git_group_on(hostref, &found.cwd),
         cmd: found.command,
         session_id: None,
         account: None,

@@ -103,7 +103,8 @@ export const listHosts = () => invoke('list_hosts');
 export const listAdoptableSessions = () => invoke('list_adoptable_sessions');
 
 /** Rename an existing tmux session into the fleet. Clients stay attached. */
-export const adoptSession = (session, name) => invoke('adopt_session', { session, name });
+export const adoptSession = (session, name, host = null) =>
+  invoke('adopt_session', { session, name, host });
 
 /** Agent processes of this user running outside tmux, movable only with reptyr. */
 export const listAdoptableProcesses = () => invoke('list_adoptable_processes');
@@ -193,7 +194,8 @@ export const sendMany = (ids, text) => invoke('send_many', { ids, text });
 // ------------------------------------------------------------------ context burn
 
 /** Token totals plus current window occupancy for one Claude transcript. */
-export const sessionUsage = (cwd, sessionId) => invoke('session_usage', { cwd, sessionId });
+export const sessionUsage = (cwd, sessionId, host = null) =>
+  invoke('session_usage', { cwd, sessionId, host });
 
 // ------------------------------------------------------------------ handoff
 

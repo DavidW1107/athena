@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::lanes::pbuild_status;
 use crate::registry::{read_reg, read_state, set_paused, Instance};
-use crate::tmux::{is_frozen, pane_map, sess_name};
+use crate::tmux::sess_name;
 use crate::util::{athena_dir, home, now, proc_stat_fields};
 
 const MEMORY: &str = "memory";
@@ -221,9 +221,28 @@ static TICK: Mutex<()> = Mutex::new(());
 static SELECTED: Mutex<Option<String>> = Mutex::new(None);
 /// Consecutive calm samples. Process-local on purpose: after a restart the count begins again
 /// at zero, which only ever delays a resume by one tick.
-static CALM: Mutex<u32> = Mutex::new(0);
+/// Calm streaks keyed by rule and machine: "memory@desk", "cpu@" for this laptop. One counter per
+/// machine, because a resume must be justified by the pressure of the machine being resumed on.
+static STREAKS: std::sync::OnceLock<Mutex<HashMap<String, u32>>> = std::sync::OnceLock::new();
+
+fn streak_key(rule: &str, host: Option<&str>) -> String {
+    format!("{}@{}", rule, host.unwrap_or(""))
+}
+
+fn streak_get(key: &str) -> u32 {
+    STREAKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map(|m| m.get(key).copied().unwrap_or(0))
+        .unwrap_or(0)
+}
+
+fn streak_set(key: &str, v: u32) {
+    if let Ok(mut m) = STREAKS.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+        m.insert(key.to_string(), v);
+    }
+}
 /// The same, for the CPU rule. Separate so a calm CPU never resumes a memory pause.
-static CPU_CALM: Mutex<u32> = Mutex::new(0);
 
 fn selected_now() -> Option<String> {
     SELECTED.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -233,8 +252,12 @@ fn selected_now() -> Option<String> {
 
 /// `some avg10` from /proc/pressure/<res>: the share of the last ten seconds in which at
 /// least one task stalled on that resource. None when PSI is absent or unreadable.
-fn psi_avg10(res: &str) -> Option<f64> {
-    let text = fs::read_to_string(format!("/proc/pressure/{}", res)).ok()?;
+///
+/// Read per machine. Pressure is a property of one kernel, so this laptop's memory being tight
+/// says nothing about the desktop's and must never pause work there; each machine's own figure
+/// governs its own instances.
+fn psi_avg10_on(host: crate::hosts::Host, res: &str) -> Option<f64> {
+    let text = crate::hosts::read_file(host, &format!("/proc/pressure/{}", res))?;
     for line in text.lines() {
         let Some(rest) = line.strip_prefix("some ") else { continue };
         for field in rest.split_whitespace() {
@@ -247,9 +270,18 @@ fn psi_avg10(res: &str) -> Option<f64> {
 }
 
 /// Kernel start time of a pid (field 22 of /proc/<pid>/stat, index 19 after comm). Together
-/// with the pid it identifies one process across restarts and pid reuse.
-fn proc_start(pid: i32) -> Option<u64> {
-    proc_stat_fields(pid)?.get(19)?.parse().ok()
+/// with the pid it identifies one process across restarts and pid reuse. Per machine, because a
+/// pid only means anything on the kernel that issued it.
+fn proc_start_on(host: crate::hosts::Host, pid: i32) -> Option<u64> {
+    match host {
+        None => proc_stat_fields(pid)?.get(19)?.parse().ok(),
+        Some(_) => {
+            // Same field, read over ssh. The comm field can contain spaces and brackets, so the
+            // split is after the LAST ')', exactly as util::proc_stat_fields does locally.
+            let text = crate::hosts::read_file(host, &format!("/proc/{}/stat", pid))?;
+            text.rsplit_once(')')?.1.split_whitespace().nth(19)?.parse().ok()
+        }
+    }
 }
 
 /// A path component that is safe to join and unambiguous to compare: no separators, no dot
@@ -383,8 +415,18 @@ struct Live {
 
 /// Everything that can move between the start of a tick and a signal, read fresh.
 fn probe(id: &str) -> Option<Live> {
-    let pane = pane_map().get(&sess_name(id)).copied()?;
-    Some(Live { pane, stopped: is_frozen(pane), hook: read_state(id).state })
+    let host = crate::registry::instance_host(id);
+    let hostref = host.as_deref();
+    let pane = crate::tmux::pane_map_on(hostref).get(&sess_name(id)).copied()?;
+    Some(Live { pane, stopped: crate::tmux::is_frozen_on(hostref, pane), hook: state_of(id, hostref).state })
+}
+
+/// Hook state for one instance, from the machine whose hook writes it.
+fn state_of(id: &str, host: crate::hosts::Host) -> crate::registry::HookState {
+    match host {
+        None => read_state(id),
+        Some(h) => crate::registry::states_for(h).get(id).cloned().unwrap_or_default(),
+    }
 }
 
 // ---------------------------------------------------------------- signalling
@@ -429,7 +471,7 @@ fn commit_pause(
     if live.stopped {
         // Already frozen by an earlier rule of ours: adopt the extra reason, send nothing.
         e.pane_pid = live.pane;
-        e.pane_start = proc_start(live.pane).unwrap_or(e.pane_start);
+        e.pane_start = proc_start_on(crate::registry::instance_host(id).as_deref(), live.pane).unwrap_or(e.pane_start);
         if e.since == 0 {
             e.since = now();
         }
@@ -443,7 +485,7 @@ fn commit_pause(
     match set_paused(id.to_string(), true) {
         Ok(()) => {
             e.pane_pid = live.pane;
-            e.pane_start = proc_start(live.pane).unwrap_or(0);
+            e.pane_start = proc_start_on(crate::registry::instance_host(id).as_deref(), live.pane).unwrap_or(0);
             // Persist immediately rather than at the end of the tick: a crash between the freeze
             // and the write would otherwise leave a frozen pane that the next run reads as paused
             // by hand and never releases.
@@ -469,7 +511,8 @@ fn commit_pause(
 /// is a no-op, and skipping a resume on a misread is how earlier versions stranded a job. A pane
 /// replaced by a different process was already dropped by the generation check in the tick.
 fn try_resume(id: &str, name: &str, e: &mut Owned, out: &mut Vec<Action>) -> bool {
-    if !pane_map().contains_key(&sess_name(id)) {
+    let host = crate::registry::instance_host(id);
+    if !crate::tmux::pane_map_on(host.as_deref()).contains_key(&sess_name(id)) {
         out.push(act(id, name, "none", "notice", "process is gone; pause forgotten"));
         return true;
     }
@@ -504,10 +547,16 @@ fn pressure_candidate(
     owned: &OwnedMap,
     selected: Option<&str>,
     rule: &str,
+    host: crate::hosts::Host,
 ) -> Pick {
     let mut mid_turn = false;
     let mut cands: Vec<(u8, u64, String)> = Vec::new();
     for inst in reg {
+        // Only this machine's instances: pausing a desktop agent would do nothing for pressure
+        // here, and the pane pids in `panes` belong to one kernel anyway.
+        if inst.host.as_deref() != host {
+            continue;
+        }
         if selected == Some(inst.id.as_str()) {
             continue;
         }
@@ -515,10 +564,10 @@ fn pressure_candidate(
             continue;
         }
         let Some(pane) = panes.get(&sess_name(&inst.id)).copied() else { continue };
-        if is_frozen(pane) {
+        if crate::tmux::is_frozen_on(host, pane) {
             continue;
         }
-        let hs = read_state(&inst.id);
+        let hs = state_of(&inst.id, host);
         if !stoppable(&inst.cmd, hs.state.as_deref()) {
             mid_turn = true;
             continue;
@@ -557,6 +606,89 @@ pub fn autopause_select(id: Option<String>) {
     *SELECTED.lock().unwrap_or_else(|e| e.into_inner()) = id.filter(|s| !s.is_empty());
 }
 
+/// One pressure rule, for one resource, on one machine.
+///
+/// Only a successful sample strictly below the threshold extends the calm streak; an unreadable
+/// sample, a sample exactly at the threshold and a disabled rule all reset it, so two
+/// nonconsecutive dips can never add up to a resume. Two calm samples, or no pressure signal at
+/// all, release the hold: with nothing left to justify it, holding a job down indefinitely is the
+/// worse failure.
+#[allow(clippy::too_many_arguments)]
+fn pressure_rule(
+    rule: &str,
+    resource: &str,
+    enabled: bool,
+    threshold: f64,
+    midturn_note: &str,
+    host: crate::hosts::Host,
+    reg: &[Instance],
+    panes: &HashMap<String, i32>,
+    owned: &mut OwnedMap,
+    names: &HashMap<String, String>,
+    cmds: &HashMap<String, String>,
+    selected: Option<&str>,
+    out: &mut Vec<Action>,
+) {
+    // Every notice names the machine once there is more than one, so a log line cannot be read as
+    // being about the wrong computer.
+    let where_ = host.map(|h| format!(" on {}", h)).unwrap_or_default();
+    let psi = psi_avg10_on(host, resource);
+    let key = streak_key(rule, host);
+    let mut calm = streak_get(&key);
+    let mut high = false;
+    if !enabled {
+        calm = 0;
+    } else {
+        match psi {
+            None => {
+                calm = 0;
+                out.push(act("", "", rule, "notice", format!("/proc/pressure/{} unreadable{}; rule idle this tick", resource, where_)));
+            }
+            Some(v) if v > threshold => {
+                calm = 0;
+                high = true;
+            }
+            Some(v) if v < threshold => calm = calm.saturating_add(1),
+            Some(_) => calm = 0,
+        }
+    }
+    streak_set(&key, calm);
+
+    if high {
+        let head = format!("{} pressure {:.0}% over {:.0}%{}", resource, psi.unwrap_or(0.0), threshold, where_);
+        match pressure_candidate(reg, panes, owned, selected, rule, host) {
+            Pick::Take(id) => commit_pause(&id, rule, &head, names, cmds, owned, out),
+            Pick::AllMidTurn => out.push(act(
+                "",
+                "",
+                rule,
+                "notice",
+                format!("{}, {}; stopping one could kill a live API call, so nothing was paused", head, midturn_note),
+            )),
+            Pick::Nothing => out.push(act("", "", rule, "notice", format!("{}, nothing left to pause", head))),
+        }
+    } else if enabled && (calm >= 2 || psi.is_none()) {
+        let why = if psi.is_none() {
+            format!("no pressure signal{}; not holding anything on {} grounds", where_, resource)
+        } else {
+            format!("{} pressure back under the threshold for two ticks{}", resource, where_)
+        };
+        // Only this machine's holds are released, so a calm laptop cannot thaw an agent the
+        // desktop is still holding down.
+        let on_host: std::collections::HashSet<&str> = reg
+            .iter()
+            .filter(|i| i.host.as_deref() == host)
+            .map(|i| i.id.as_str())
+            .collect();
+        for (id, e) in owned.iter_mut() {
+            if on_host.contains(id.as_str()) && e.reasons.remove(rule) {
+                let label = name_of(names, id);
+                out.push(act(id, &label, rule, "notice", why.clone()));
+            }
+        }
+    }
+}
+
 /// Evaluate the three rules once and act. Order matters: reconcile ownership, release reasons
 /// whose condition has gone, evaluate each enabled rule, then resume anything left holding no
 /// reason at all.
@@ -571,18 +703,30 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
     let names: HashMap<String, String> =
         reg.iter().map(|i| (i.id.clone(), i.name.clone())).collect();
     let cmds: HashMap<String, String> = reg.iter().map(|i| (i.id.clone(), i.cmd.clone())).collect();
-    let panes = pane_map();
+    // One pane map per machine in the fleet; a pid is only meaningful on the kernel that issued it.
+    let hosts_in_use: Vec<Option<String>> = {
+        let mut v: Vec<Option<String>> = reg.iter().map(|i| i.host.clone()).collect();
+        v.push(None);
+        v.sort();
+        v.dedup();
+        v
+    };
+    let panes_by_host = crate::tmux::pane_maps(&hosts_in_use);
+    let host_of: HashMap<String, Option<String>> =
+        reg.iter().map(|i| (i.id.clone(), i.host.clone())).collect();
     let selected = selected_now();
 
     // --- 1. generation reconcile. An entry survives only while the exact process it froze
     // does, so a restarted session or a recycled instance id can never be signalled by proxy.
     for id in owned.keys().cloned().collect::<Vec<_>>() {
         let e = owned[&id].clone();
-        let gone = match panes.get(&sess_name(&id)).copied() {
+        let h = host_of.get(&id).cloned().flatten();
+        let gone = match panes_by_host.get(&h).and_then(|m| m.get(&sess_name(&id))).copied() {
             None => true,
             Some(pid) => {
                 pid != e.pane_pid
-                    || (e.pane_start != 0 && proc_start(pid).map(|s| s != e.pane_start).unwrap_or(false))
+                    || (e.pane_start != 0
+                        && proc_start_on(h.as_deref(), pid).map(|s| s != e.pane_start).unwrap_or(false))
             }
         };
         if gone || !names.contains_key(&id) {
@@ -633,118 +777,35 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
         }
     }
 
-    // --- 3. memory. Only a successful sample strictly below the threshold extends the calm
-    // streak; an unreadable sample, a sample exactly at the threshold and a disabled rule all
-    // reset it, so two nonconsecutive dips can never add up to a resume.
-    let psi = psi_avg10("memory");
-    let mut calm_guard = CALM.lock().unwrap_or_else(|e| e.into_inner());
-    let mut calm = *calm_guard;
-    let mut high = false;
-    if !rules.memory_enabled {
-        calm = 0;
-    } else {
-        match psi {
-            None => {
-                calm = 0;
-                out.push(act("", "", MEMORY, "notice", "/proc/pressure/memory unreadable; rule idle this tick"));
-            }
-            Some(v) if v > rules.memory_threshold => {
-                calm = 0;
-                high = true;
-            }
-            Some(v) if v < rules.memory_threshold => calm = calm.saturating_add(1),
-            Some(_) => calm = 0,
-        }
-    }
-    *calm_guard = calm;
-    drop(calm_guard);
-
-    if high {
-        let head = format!("memory pressure {:.0}% over {:.0}%", psi.unwrap_or(0.0), rules.memory_threshold);
-        match pressure_candidate(&reg, &panes, &owned, selected.as_deref(), MEMORY) {
-            Pick::Take(id) => commit_pause(&id, MEMORY, &head, &names, &cmds, &mut owned, &mut out),
-            Pick::AllMidTurn => out.push(act(
-                "",
-                "",
-                MEMORY,
-                "notice",
-                format!("{}, but no candidate can be shown to be safely idle; stopping one could kill a live API call, so nothing was paused", head),
-            )),
-            Pick::Nothing => out.push(act("", "", MEMORY, "notice", format!("{}, nothing left to pause", head))),
-        }
-    } else if rules.memory_enabled && (calm >= 2 || psi.is_none()) {
-        // Two calm samples, or no pressure signal at all: with nothing to justify the hold,
-        // holding a job down indefinitely is the worse failure.
-        let why = if psi.is_none() {
-            "no pressure signal; not holding anything on memory grounds"
-        } else {
-            "pressure back under the threshold for two ticks"
-        };
-        for (id, e) in owned.iter_mut() {
-            if e.reasons.remove(MEMORY) {
-                let label = name_of(&names, id);
-                out.push(act(id, &label, MEMORY, "notice", why));
-            }
-        }
-    }
-
-    // --- 3b. cpu. Same shape as the memory rule and deliberately not folded into it: the two
-    // resources go tight independently, and a machine can be pegged on CPU while memory PSI sits
-    // at zero. That is precisely what happened on 2026-09-06 (cpu 82%, memory 0.00%), when the
-    // memory rule was the only pressure rule and so saw a perfectly calm machine.
+    // --- 3. pressure, per resource and per machine.
     //
-    // This cannot stop a session that is mid-turn - `stoppable` refuses anything `working`, and
-    // that is the correct trade, since a frozen agent loses its API call. So this rule only
-    // ever parks genuinely idle instances to give the busy ones room. It is a second layer, not
-    // the fix for a session spawning duplicate jobs; the PreToolUse duplicate guard is that.
-    let cpu_psi = psi_avg10("cpu");
-    let mut cpu_calm_guard = CPU_CALM.lock().unwrap_or_else(|e| e.into_inner());
-    let mut cpu_calm = *cpu_calm_guard;
-    let mut cpu_high = false;
-    if !rules.cpu_enabled {
-        cpu_calm = 0;
-    } else {
-        match cpu_psi {
-            None => {
-                cpu_calm = 0;
-                out.push(act("", "", CPU, "notice", "/proc/pressure/cpu unreadable; rule idle this tick"));
-            }
-            Some(v) if v > rules.cpu_threshold => {
-                cpu_calm = 0;
-                cpu_high = true;
-            }
-            Some(v) if v < rules.cpu_threshold => cpu_calm = cpu_calm.saturating_add(1),
-            Some(_) => cpu_calm = 0,
-        }
-    }
-    *cpu_calm_guard = cpu_calm;
-    drop(cpu_calm_guard);
-
-    if cpu_high {
-        let head = format!("cpu pressure {:.0}% over {:.0}%", cpu_psi.unwrap_or(0.0), rules.cpu_threshold);
-        match pressure_candidate(&reg, &panes, &owned, selected.as_deref(), CPU) {
-            Pick::Take(id) => commit_pause(&id, CPU, &head, &names, &cmds, &mut owned, &mut out),
-            Pick::AllMidTurn => out.push(act(
-                "",
-                "",
-                CPU,
-                "notice",
-                format!("{}, but every candidate is mid-turn; stopping one could kill a live API call, so nothing was paused", head),
-            )),
-            Pick::Nothing => out.push(act("", "", CPU, "notice", format!("{}, nothing left to pause", head))),
-        }
-    } else if rules.cpu_enabled && (cpu_calm >= 2 || cpu_psi.is_none()) {
-        let why = if cpu_psi.is_none() {
-            "no pressure signal; not holding anything on cpu grounds"
-        } else {
-            "cpu pressure back under the threshold for two ticks"
-        };
-        for (id, e) in owned.iter_mut() {
-            if e.reasons.remove(CPU) {
-                let label = name_of(&names, id);
-                out.push(act(id, &label, CPU, "notice", why));
-            }
-        }
+    // Memory and cpu are evaluated independently because the two go tight independently: a machine
+    // can be pegged on CPU while memory PSI sits at zero, which is exactly what happened on
+    // 2026-09-06 (cpu 82%, memory 0.00%) when memory was the only pressure rule and so saw a
+    // perfectly calm machine. They share one implementation but never share a streak, a threshold
+    // or a switch.
+    //
+    // Per machine, because pressure belongs to a kernel: this laptop being tight is no reason to
+    // freeze an agent on the desktop, and freezing one there would not give this laptop any room.
+    //
+    // Neither rule can stop a session that is mid-turn - `stoppable` refuses anything `working` -
+    // and that is the correct trade, since a frozen agent loses its API call. So they only ever
+    // park genuinely idle instances to give the busy ones room. A second layer, not the fix for a
+    // session spawning duplicate jobs; the PreToolUse duplicate guard is that.
+    for host in &hosts_in_use {
+        let hr = host.as_deref();
+        let empty = HashMap::new();
+        let host_panes = panes_by_host.get(host).unwrap_or(&empty);
+        pressure_rule(
+            MEMORY, "memory", rules.memory_enabled, rules.memory_threshold,
+            "but no candidate can be shown to be safely idle",
+            hr, &reg, host_panes, &mut owned, &names, &cmds, selected.as_deref(), &mut out,
+        );
+        pressure_rule(
+            CPU, "cpu", rules.cpu_enabled, rules.cpu_threshold,
+            "but every candidate is mid-turn",
+            hr, &reg, host_panes, &mut owned, &names, &cmds, selected.as_deref(), &mut out,
+        );
     }
 
     // --- 4. waiting on another run's shard.
@@ -782,11 +843,12 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
             if selected.as_deref() == Some(inst.id.as_str()) {
                 continue;
             }
-            let Some(pane) = panes.get(&sess_name(&inst.id)).copied() else { continue };
-            if is_frozen(pane) {
+            let hr = inst.host.as_deref();
+            let Some(pane) = panes_by_host.get(&inst.host).and_then(|m| m.get(&sess_name(&inst.id))).copied() else { continue };
+            if crate::tmux::is_frozen_on(hr, pane) {
                 continue;
             }
-            let hs = read_state(&inst.id);
+            let hs = state_of(&inst.id, hr);
             if hs.state.as_deref() != Some("needs-you") {
                 continue;
             }
@@ -833,6 +895,11 @@ pub fn autopause_tick(rules: Rules) -> TickReport {
         })
         .collect();
 
+    // The header shows ONE pressure figure and has always meant "this machine". Remote pressure is
+    // not hidden: every action line from a remote rule names its host.
+    let psi = psi_avg10_on(None, "memory");
+    let calm = streak_get(&streak_key(MEMORY, None));
+    let high = psi.map(|v| v > rules.memory_threshold).unwrap_or(false);
     TickReport { psi, threshold: rules.memory_threshold, calm, high, held, actions: out }
 }
 
@@ -914,11 +981,25 @@ mod tests {
         // Both files exist on this kernel; the point is that they are read separately and can
         // disagree, which is the whole reason the cpu rule exists.
         for res in ["cpu", "memory"] {
-            if let Some(v) = psi_avg10(res) {
+            if let Some(v) = psi_avg10_on(None, res) {
                 assert!(v.is_finite() && v >= 0.0, "{} gave {}", res, v);
             }
         }
-        assert_eq!(psi_avg10("no-such-resource"), None);
+        assert_eq!(psi_avg10_on(None, "no-such-resource"), None);
+    }
+
+    #[test]
+    fn a_streak_is_per_rule_and_per_machine() {
+        // Four independent counters, not one: a calm laptop must not release a hold the desktop
+        // still justifies, and calm memory must not release a cpu hold.
+        for (rule, host) in [("memory", None), ("memory", Some("desk")), ("cpu", None), ("cpu", Some("desk"))] {
+            streak_set(&streak_key(rule, host), 0);
+        }
+        streak_set(&streak_key("memory", Some("desk")), 7);
+        assert_eq!(streak_get(&streak_key("memory", Some("desk"))), 7);
+        assert_eq!(streak_get(&streak_key("memory", None)), 0);
+        assert_eq!(streak_get(&streak_key("cpu", Some("desk"))), 0);
+        assert_eq!(streak_get(&streak_key("cpu", None)), 0);
     }
 
     #[test]

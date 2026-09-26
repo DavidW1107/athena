@@ -37,6 +37,52 @@ pub struct UsageSummary {
     pub context_limit: Option<u64>,
 }
 
+/// Keep a local copy of a remote transcript in step, and answer with its path.
+///
+/// A transcript is append-only and reaches tens of megabytes, and the meter re-reads it on a timer,
+/// so shipping the whole file every refresh would put that much over the cable each time for a few
+/// hundred bytes of new data. Instead only the bytes past what we already hold are fetched
+/// (`tail -c +N`) and appended to a mirror under ~/.athena/cache, and the existing parser then runs
+/// on that mirror unchanged: one implementation of the token accounting, not two.
+///
+/// A remote file SHORTER than the mirror is not an append: the session was rewritten or the id was
+/// reused, so the mirror is thrown away and refetched whole rather than parsed as a spliced file.
+fn mirror_transcript(host: &str, rel: &str) -> Result<std::path::PathBuf, String> {
+    let local = crate::util::athena_dir().join("cache").join("transcripts").join(host).join(rel);
+    if let Some(dir) = local.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("could not make the mirror directory: {}", e))?;
+    }
+    let remote = format!("$HOME/.claude/projects/{}", rel);
+    let size_out = crate::hosts::run(Some(host), "sh", &["-c", &format!("stat -c %s \"{}\" 2>/dev/null || echo 0", remote)])
+        .ok_or_else(|| format!("{} is not reachable", host))?;
+    let remote_size: u64 = String::from_utf8_lossy(&size_out.stdout).trim().parse().unwrap_or(0);
+    if remote_size == 0 {
+        return Err(format!("no transcript for that session on {}", host));
+    }
+    let have = std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
+    if have > remote_size {
+        let _ = std::fs::remove_file(&local);
+    }
+    let have = std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
+    if have == remote_size {
+        return Ok(local);
+    }
+    let script = format!("tail -c +{} \"{}\"", have + 1, remote);
+    let out = crate::hosts::run(Some(host), "sh", &["-c", &script])
+        .ok_or_else(|| format!("{} is not reachable", host))?;
+    if !out.status.success() {
+        return Err(format!("could not read the transcript on {}", host));
+    }
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&local)
+        .map_err(|e| format!("could not write the mirror: {}", e))?;
+    f.write_all(&out.stdout).map_err(|e| format!("could not write the mirror: {}", e))?;
+    Ok(local)
+}
+
 fn field(usage: &serde_json::Value, name: &str) -> u64 {
     usage.get(name).and_then(|v| v.as_u64()).unwrap_or(0)
 }
@@ -79,15 +125,15 @@ fn valid_session_id(id: &str) -> bool {
 /// Malformed lines are skipped, so a truncated or partly written transcript
 /// still reports the usage it does contain.
 #[tauri::command]
-pub fn session_usage(cwd: String, session_id: String) -> Result<UsageSummary, String> {
+pub fn session_usage(cwd: String, session_id: String, host: Option<String>) -> Result<UsageSummary, String> {
     if !valid_session_id(&session_id) {
         return Err(format!("not a session id: {}", session_id));
     }
-    let path = home()
-        .join(".claude")
-        .join("projects")
-        .join(project_slug(&cwd))
-        .join(format!("{}.jsonl", session_id));
+    let rel = format!("{}/{}.jsonl", project_slug(&cwd), session_id);
+    let path = match host.as_deref().filter(|h| !h.trim().is_empty()) {
+        None => home().join(".claude").join("projects").join(&rel),
+        Some(h) => mirror_transcript(h, &rel)?,
+    };
     let file = File::open(&path)
         .map_err(|e| format!("could not read transcript {}: {}", path.display(), e))?;
 
