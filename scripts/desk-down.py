@@ -19,10 +19,18 @@ Paths: WSL resolves /home/david to /home/drwalsh, so desktop paths live under /h
 laptop paths under /home/david. Claude files a transcript under a slug of the resolved cwd, so the
 transcript moves to the slug of the mapped path, which is where `claude --resume` looks for it.
 
-Git: .git goes TO the desktop (an agent there needs status, diff, commit) but never comes back;
-the laptop's history is the truth. ponytail: a commit made on the desktop therefore comes home as
-uncommitted changes in the working tree, nothing lost, but the commit itself is. Push from the
-desktop, or commit on the laptop, if that ever matters.
+Git: history is never rsynced, in either direction, because two copies of .git merged file by file
+is how a repository gets corrupted. Instead it moves as git:
+
+  * coming home, the desktop's commits are FETCHED over ssh into the laptop repo and the branch moves
+    up to them, leaving the working tree exactly as rsync delivered it, so an agent's commit arrives
+    as a commit and its later edits arrive as uncommitted changes;
+  * going out, the laptop's .git is MIRRORED to the desktop (--delete), the laptop being the single
+    source of truth for history, but only after checking the desktop has no commits of its own to
+    lose.
+
+Either direction refuses the move rather than mangle a repository, and any commit it cannot place is
+left on refs/desk-move/<instance id> so nothing is ever only on the other machine.
 """
 import json
 import os
@@ -74,8 +82,10 @@ def read_reg():
 
 
 def update_reg(iid, **fields):
-    # ponytail: read-modify-write with an atomic rename, no lock. Athena writes this file only on
-    # launch/close/account moves, so a clash needs one of those in the same few milliseconds.
+    # ponytail: read-modify-write with an atomic rename, no lock. What makes that survivable is not
+    # that Athena writes rarely (its poll writes whenever it first sees a session_id or an account):
+    # it is that list_instances re-reads the file and copies only those two fields forward, so a poll
+    # mid-flight cannot put host="desk" back over this. See registry.rs, commit 6559e27.
     reg = read_reg()
     for inst in reg:
         if inst["id"] == iid:
@@ -84,6 +94,144 @@ def update_reg(iid, **fields):
     with open(tmp, "w") as f:
         json.dump(reg, f, indent=2)
     os.replace(tmp, REG)
+
+
+def valid_sid(sid):
+    """A session id is interpolated into the resume line that gets typed into a pane, so it is
+    checked rather than trusted, exactly as accounts.rs::move_to checks it."""
+    return bool(sid) and 8 <= len(sid) <= 64 and all(c in "0123456789abcdefABCDEF-" for c in sid)
+
+
+def digests(loc, paths):
+    """md5 for each path under `loc`, which is either a local directory or `host:/dir`."""
+    if not paths:
+        return {}
+    remote = ":" in loc.split("/", 1)[0]
+    root = loc.split(":", 1)[1] if remote else loc
+    listing = " ".join(shlex.quote(p) for p in paths)
+    _, out = sh(f"cd {shlex.quote(root)} && md5sum -- {listing} 2>/dev/null", remote)
+    got = {}
+    for line in out.splitlines():
+        h, _, p = line.partition("  ")
+        if p:
+            got[p] = h
+    return got
+
+
+def skipped_by_update(src, dst, excludes):
+    """Paths `--update` would silently leave behind: the receiver's copy is newer AND differs.
+
+    rsync says nothing about a file it skips, so without this a move reports "0 file(s) back", kills
+    the session and shuts the machine down while the work sits on the far side.
+
+    Two dry passes give the candidates: everything rsync would send, minus what --update would
+    actually send. That set is then confirmed by content, because rsync compares size and mtime, and
+    after one skip the two copies keep DIFFERENT mtimes for identical bytes for ever after: without
+    the checksum this would refuse every later move over a file nobody has touched. The checksum
+    only ever runs on the handful of candidates, never the whole tree.
+    """
+    ex = [f"--exclude={e}" for e in excludes]
+    pick = lambda out: {l.split(" ", 1)[1] for l in out.splitlines() if l[:2] in (">f", "<f")}
+    cands = pick(run("rsync", "-ain", *ex, src, dst).stdout) - pick(run("rsync", "-ain", "--update", *ex, src, dst).stdout)
+    if not cands:
+        return []
+    here, there = digests(src, cands), digests(dst, cands)
+    return sorted(p for p in cands if here.get(p) != there.get(p))
+
+
+def git_at(path, remote, *args):
+    ok, out = sh(f"git -C {shlex.quote(path)} {' '.join(args)} 2>/dev/null", remote)
+    return out.strip() if ok else None
+
+
+def keep_ref(iid):
+    return f"refs/desk-move/{iid}"
+
+
+def fetch_their_commits(iid, their_top, our_top, host_label):
+    """Pull the far side's commits into a local ref. Returns (ref, error)."""
+    ref = keep_ref(iid)
+    p = run("git", "-C", our_top, "fetch", "--no-tags", f"ssh://{HOST}{their_top}", f"+HEAD:{ref}")
+    if p.returncode:
+        return None, f"could not fetch commits from {host_label}: {p.stderr.strip().splitlines()[-1:] or ''}"
+    return ref, None
+
+
+def commits_home_check(iid, dcwd, lcwd):
+    """Can the desktop's commits land here? Returns (ok, plan, message).
+
+    Runs BEFORE any file is copied, because a refusal has to leave both machines as they were: an
+    earlier version rsynced the tree first and a git refusal then left the laptop holding desktop
+    files from a move that had officially not happened. The only thing this mutates is a keep ref,
+    which is how the commits stop being only on the desktop even when the move fails.
+    """
+    dtop, ltop = git_at(dcwd, True, "rev-parse", "--show-toplevel"), git_at(lcwd, False, "rev-parse", "--show-toplevel")
+    if not dtop:
+        return True, None, None  # not a repo there, nothing to carry
+    if not ltop:
+        return False, None, f"{dcwd} is a git repo on {HOST} but {lcwd} is not one here"
+    dhead, lhead = git_at(dtop, True, "rev-parse", "HEAD"), git_at(ltop, False, "rev-parse", "HEAD")
+    if not dhead or dhead == lhead:
+        return True, None, None
+    ref, err = fetch_their_commits(iid, dtop, ltop, HOST)
+    if err:
+        return False, None, err
+    # The desktop can also be BEHIND, which is the normal state after a move was resolved here: its
+    # commits are already in this history, so there is nothing to carry and the move is free to go on.
+    if lhead and run("git", "-C", ltop, "merge-base", "--is-ancestor", ref, lhead).returncode == 0:
+        run("git", "-C", ltop, "update-ref", "-d", ref)
+        return True, None, None
+    if lhead and run("git", "-C", ltop, "merge-base", "--is-ancestor", lhead, ref).returncode:
+        return False, None, (f"{HOST} has commits this repo cannot fast-forward onto. They are safe on "
+                             f"{ref} in {ltop}; merge or rebase them there, then move again")
+    return True, (ltop, ref, dhead), None
+
+
+def commits_home_apply(plan):
+    """Move the branch onto the fetched commits, once the files are here. Returns (ok, message)."""
+    if not plan:
+        return True, None
+    ltop, ref, dhead = plan
+    # --mixed, not --ff-only: the working tree now holds what rsync brought from the desktop, and a
+    # merge would refuse to overwrite it. This moves the branch and leaves the files alone, so a
+    # commit arrives as a commit and anything edited after it arrives as an uncommitted change.
+    if run("git", "-C", ltop, "reset", "--mixed", ref).returncode:
+        return False, f"could not move {ltop} onto the desktop's commits; they are on {ref}"
+    run("git", "-C", ltop, "update-ref", "-d", ref)
+    return True, f"took commit {dhead[:8]} from {HOST}"
+
+
+def mirror_git_check(iid, lcwd, dcwd):
+    """Would mirroring this .git outwards destroy commits only the desktop has? (ok, ltop, message)"""
+    ltop = git_at(lcwd, False, "rev-parse", "--show-toplevel")
+    if not ltop:
+        return True, None, None
+    dtop = git_at(dcwd, True, "rev-parse", "--show-toplevel")
+    if dtop:
+        dhead, lhead = git_at(dtop, True, "rev-parse", "HEAD"), git_at(ltop, False, "rev-parse", "HEAD")
+        if dhead and dhead != lhead:
+            # The desktop is ahead or has diverged. Mirroring over it would destroy those commits, so
+            # they are fetched here first and the move refuses either way: if they are already in this
+            # history the mirror is safe, otherwise a human decides.
+            ref, err = fetch_their_commits(iid, dtop, ltop, HOST)
+            if err:
+                return False, None, err
+            if run("git", "-C", ltop, "merge-base", "--is-ancestor", ref, "HEAD").returncode:
+                return False, None, (f"{HOST} already has commits this repo does not: they are on {ref} "
+                                     f"in {ltop}. Take them first, then send this instance out again")
+            run("git", "-C", ltop, "update-ref", "-d", ref)
+    return True, ltop, None
+
+
+def mirror_git_out(ltop):
+    """The laptop's .git onto the desktop. One-way and exact, because a .git merged file by file is
+    how a repository gets corrupted; the laptop is the single source of truth for history."""
+    if not ltop:
+        return True, None
+    p = run("rsync", "-a", "--delete", "--mkpath", f"{ltop}/.git/", f"{HOST}:{to_desk(ltop)}/.git/")
+    if p.returncode:
+        return False, f"could not mirror .git to {HOST}: {p.stderr.strip()}"
+    return True, None
 
 
 def stop_claude(sess, remote):
@@ -130,6 +278,9 @@ def down(inst, state, dry, park):
     was = state.get("state") or "idle"
     sync = lcwd.startswith(REPOS + "/")
     print(f"  {inst['name']}: {dcwd} -> {lcwd} ({was})")
+    if not valid_sid(sid):
+        print(f"    {sid!r} is not a session id; left there")
+        return False
     if dry:
         print(f"    would stop claude, {'sync the tree, ' if sync else ''}copy transcript {sid}, "
               + ("park it here" if park else "resume it here"))
@@ -141,6 +292,19 @@ def down(inst, state, dry, park):
     if sync:
         # --update: a file only comes back if the desktop's copy is newer, so an edit made here
         # since it was pushed out is kept. Deletions on the desktop are not carried back.
+        # Anything --update would drop silently stops the move instead: this is the only chance to
+        # notice, because the next steps kill the session and can power the machine off.
+        ok, plan, msg = commits_home_check(iid, dcwd, lcwd)
+        if not ok:
+            print(f"    {msg}; claude stopped but NOT moved")
+            return False
+        stale = skipped_by_update(f"{HOST}:{dcwd}/", f"{lcwd}/", PULL_EXCLUDES)
+        if stale:
+            print(f"    {len(stale)} file(s) changed on {HOST} but are OLDER than this laptop's copy, "
+                  f"so rsync would drop them; claude stopped but NOT moved:")
+            for f in stale[:20]:
+                print(f"      {f}")
+            return False
         p = run("rsync", "-a", "--update", "--mkpath", "--itemize-changes",
                 *[f"--exclude={e}" for e in PULL_EXCLUDES], f"{HOST}:{dcwd}/", f"{lcwd}/")
         if p.returncode:
@@ -148,6 +312,12 @@ def down(inst, state, dry, park):
             return False
         changed = [l.split(" ", 1)[1] for l in p.stdout.splitlines() if l.startswith(">f")]
         print(f"    {len(changed)} file(s) back" + (": " + ", ".join(changed[:8]) if changed else ""))
+        ok, msg = commits_home_apply(plan)
+        if not ok:
+            print(f"    {msg}; the files are here but the history is not")
+            return False
+        if msg:
+            print(f"    {msg}")
     elif not os.path.isdir(lcwd):
         print(f"    {lcwd} does not exist here; claude stopped but NOT moved")
         return False
@@ -163,6 +333,9 @@ def down(inst, state, dry, park):
     except FileNotFoundError:
         pass
     sh(f"tmux kill-session -t {shlex.quote(sess)}", remote=True)
+    # The desktop's own hook file would otherwise sit there and be read as this instance's live state
+    # the next time it goes back, ahead of the new session's first write. up() clears it the same way.
+    sh(f"rm -f ~/.athena/state/{shlex.quote(iid)}.json", remote=True)
     if park:
         print("    parked on the laptop")
         return True
@@ -188,8 +361,8 @@ def up(inst, dry):
     working = (now_state == "working") if live else (inst.get("parked") == "working")
     sync = lcwd.startswith(REPOS + "/")
     print(f"  {inst['name']}: {lcwd} -> {dcwd} ({'live' if live else 'parked'}{', working' if working else ''})")
-    if not inst["cmd"].startswith("claude") or not sid:
-        print("    not a claude session with a resume id; left here")
+    if not inst["cmd"].startswith("claude") or not valid_sid(sid):
+        print("    not a claude session with a usable resume id; left here")
         return False
     if dry:
         print(f"    would {'stop claude, ' if live else ''}{'sync the tree, ' if sync else ''}"
@@ -200,13 +373,31 @@ def up(inst, dry):
         print("    claude here did not exit; left here")
         return False
     if sync:
+        # .git is mirrored separately, below: merging two copies of it file by file is how a
+        # repository gets corrupted, and --update would do exactly that.
+        excl = PUSH_EXCLUDES + [".git/"]
+        ok, ltop, msg = mirror_git_check(iid, lcwd, dcwd)
+        if not ok:
+            print(f"    {msg}; NOT moved")
+            return False
+        stale = skipped_by_update(f"{lcwd}/", f"{HOST}:{dcwd}/", excl)
+        if stale:
+            print(f"    {len(stale)} file(s) on {HOST} are NEWER than this laptop's copy but differ, "
+                  f"so rsync would leave the desktop's version in place; NOT moved:")
+            for f in stale[:20]:
+                print(f"      {f}")
+            return False
         p = run("rsync", "-a", "--update", "--mkpath", "--itemize-changes",
-                *[f"--exclude={e}" for e in PUSH_EXCLUDES], f"{lcwd}/", f"{HOST}:{dcwd}/")
+                *[f"--exclude={e}" for e in excl], f"{lcwd}/", f"{HOST}:{dcwd}/")
         if p.returncode:
             print(f"    file sync failed, NOT moved: {p.stderr.strip()}")
             return False
         n = sum(1 for l in p.stdout.splitlines() if l.startswith("<f"))
         print(f"    {n} file(s) out")
+        ok, msg = mirror_git_out(ltop)
+        if not ok:
+            print(f"    {msg}; the files are out but the history is not")
+            return False
     else:
         ok, _ = sh(f"test -d {shlex.quote(dcwd)}", remote=True)
         if not ok:
@@ -252,17 +443,30 @@ def main_down(args):
     states, live = desk_states()
     movable, stranded = [], []
     for inst in read_reg():
-        if inst.get("host") != HOST or f"athena_{inst['id']}" not in live:
-            continue  # not there, or already dead there; restore brings it back tomorrow
+        if inst.get("host") != HOST:
+            continue
+        # A session that already died on the desktop is still worth moving: its working tree is on a
+        # machine about to be switched off, and leaving the record pointing at `desk` means tomorrow's
+        # restore aims at a powered-down box. stop_claude is a no-op when there is no session.
         st = states.get(inst["id"], {})
         claude = inst["cmd"].startswith("claude")
         (movable if claude and (inst.get("session_id") or st.get("session_id")) else stranded).append((inst, st))
 
     print(f"{len(movable)} to bring home {'parked' if park else 'and resume'}, {len(stranded)} that cannot move")
+    doomed = [i for i, _ in stranded if f"athena_{i['id']}" in live]
     for inst, _ in stranded:
-        print(f"  stays and dies: {inst['name']} ({inst['cmd']}) in {inst['cwd']}")
-    if stranded and not dry and not stay:
-        if input("Shut down anyway? [y/N] ").strip().lower() != "y":
+        alive = f"athena_{inst['id']}" in live
+        print(f"  {'stays and dies' if alive else 'already dead there'}: "
+              f"{inst['name']} ({inst['cmd']}) in {inst['cwd']}")
+    # Only a session still RUNNING there is worth asking about. One that has already exited loses
+    # nothing to the power switch, and asking about it trains the answer out of you.
+    if doomed and not dry and not stay:
+        # No terminal means no answer, and the safe answer is not to power off over someone's work.
+        # This is what lets the script run from a hook or a schedule at all.
+        if not sys.stdin.isatty():
+            stay = True
+            print("nothing can be asked here (no terminal); moving what can move, leaving it on")
+        elif input("Shut down anyway? [y/N] ").strip().lower() != "y":
             stay = True
             print("Moving what can move, leaving the desktop on.")
 
