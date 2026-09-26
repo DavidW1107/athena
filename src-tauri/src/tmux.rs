@@ -26,9 +26,6 @@ pub fn tmux_alive_on(host: Host, sess: &str) -> bool {
     tmux_on(host, &["has-session", "-t", sess]).map(|o| o.status.success()).unwrap_or(false)
 }
 
-pub fn tmux_alive(sess: &str) -> bool {
-    tmux_alive_on(None, sess)
-}
 
 pub fn pane_pid_on(host: Host, sess: &str) -> Option<i32> {
     let o = tmux_on(host, &["list-panes", "-t", sess, "-F", "#{pane_pid}"])?;
@@ -186,9 +183,6 @@ pub fn send_block_on(host: Host, sess: &str, tag: &str, text: &str) -> Result<()
         .map_err(|e| format!("text is in the pane but was not submitted: {}", e))
 }
 
-pub fn send_block(sess: &str, tag: &str, text: &str) -> Result<(), String> {
-    send_block_on(None, sess, tag, text)
-}
 
 /// Server options Athena wants in place before it creates any session.
 ///
