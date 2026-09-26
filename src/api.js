@@ -58,8 +58,8 @@ export const listInstances = () => invoke('list_instances');
  * Start an instance. `group` null means "give it its own tile"; passing a group name puts it
  * in that exact tile, which is what a tile's own + asks for.
  */
-export const launch = (cwd, cmd, name, group = null, ownTile = false) =>
-  invoke('launch_in', { cwd, cmd, name, group, ownTile });
+export const launch = (cwd, cmd, name, group = null, ownTile = false, host = null) =>
+  invoke('launch_in', { cwd, cmd, name, group, ownTile, host });
 
 /** Move an instance into another tile. Grouping is per instance, so a merge is a reassignment. */
 export const setGroup = (id, group) => invoke('set_group', { id, group });
@@ -87,6 +87,15 @@ export const sendKey = (id, key) => invoke('send_key', { id, key });
 
 /** Repo paths one and two levels under ~/Documents/GitHub, sorted. */
 export const listRepos = () => invoke('list_repos');
+
+/** The same list from another machine. A null host is this one. */
+export const listReposOn = (host) => invoke('list_repos_on', { host });
+
+/**
+ * Machines an instance can be launched on: the ssh aliases in ~/.ssh/config.
+ * Null in an instance's `host` field means this laptop.
+ */
+export const listHosts = () => invoke('list_hosts');
 
 // ------------------------------------------------------------------ adoption
 

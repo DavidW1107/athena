@@ -7,9 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::tmux::{
-    git_group, is_frozen, pane_map, pane_pid, send_block, sess_name, set_frozen, tmux, tmux_alive,
-};
+use crate::tmux::sess_name;
 use crate::util::{athena_dir, home, now};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -24,6 +22,10 @@ pub struct Instance {
     /// Which subscription it runs on, see accounts.rs. None is account "a".
     #[serde(default)]
     pub account: Option<String>,
+    /// Which machine it runs on: an ssh alias, or None for this laptop. Absent in every record
+    /// written before the desktop existed, which is exactly what `default` means here.
+    #[serde(default)]
+    pub host: Option<String>,
     #[serde(default)]
     pub created: u64,
 }
@@ -96,6 +98,78 @@ pub fn read_state(id: &str) -> HookState {
         .unwrap_or_default()
 }
 
+/// Every hook state on a remote host, in ONE ssh call.
+///
+/// The hook runs beside the agent, so a desktop instance writes its state into the DESKTOP's
+/// ~/.athena/state and this laptop never sees it. Reading those files one ssh call at a time would
+/// cost a round trip per instance per second, so the whole directory comes back as one
+/// `id<TAB>json` line per file. A machine that is off yields nothing, which lands as the empty
+/// state an unreachable instance should have.
+fn remote_states(host: &str) -> std::collections::HashMap<String, HookState> {
+    let script = r#"cd "$HOME/.athena/state" 2>/dev/null || exit 0
+for f in *.json; do
+  [ -e "$f" ] || continue
+  printf '%s\t' "${f%.json}"
+  tr -d '\n' < "$f"
+  printf '\n'
+done"#;
+    let mut out = std::collections::HashMap::new();
+    let Some(o) = crate::hosts::run(Some(host), "sh", &["-c", script]) else { return out };
+    for line in String::from_utf8_lossy(&o.stdout).lines() {
+        if let Some((id, json)) = line.split_once('\t') {
+            if let Ok(hs) = serde_json::from_str::<HookState>(json) {
+                out.insert(id.to_string(), hs);
+            }
+        }
+    }
+    out
+}
+
+/// Drop the hook state file for an instance, on the machine that writes it.
+///
+/// A stale record is read as live state: a restored session showing `working` from the run that
+/// died, a false needs-you, an auto-pause decision taken on a state nothing is producing.
+fn clear_state(host: crate::hosts::Host, id: &str) {
+    match host {
+        None => {
+            let _ = fs::remove_file(athena_dir().join("state").join(format!("{}.json", id)));
+        }
+        Some(_) => {
+            // Through `sh -c`, because every argument is quoted on the way out and `$HOME` would
+            // otherwise arrive at the far side as four literal characters.
+            let script = format!("rm -f \"$HOME/.athena/state/{}.json\"", id);
+            let _ = crate::hosts::run(host, "sh", &["-c", &script]);
+        }
+    }
+}
+
+/// Does this directory exist on the machine that would run in it?
+fn dir_exists(host: crate::hosts::Host, path: &str) -> bool {
+    match host {
+        None => PathBuf::from(path).is_dir(),
+        Some(_) => crate::hosts::run(host, "test", &["-d", path]).map(|o| o.status.success()).unwrap_or(false),
+    }
+}
+
+/// The resolved spelling of a path, on the machine that owns it.
+fn canonical_on(host: crate::hosts::Host, path: &str) -> Option<String> {
+    match host {
+        None => fs::canonicalize(path).ok().map(|p| p.to_string_lossy().to_string()),
+        Some(_) => {
+            let o = crate::hosts::run(host, "readlink", &["-f", path])?;
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            (o.status.success() && !s.is_empty()).then_some(s)
+        }
+    }
+}
+
+/// Which machine an instance runs on, straight from the registry. Every command that reaches a
+/// session has to ask this first, because a tmux call sent to the wrong machine simply reports
+/// that the session does not exist.
+pub fn instance_host(id: &str) -> Option<String> {
+    read_reg().into_iter().find(|i| i.id == id).and_then(|i| i.host)
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct InstanceView {
     pub id: String,
@@ -106,6 +180,7 @@ pub struct InstanceView {
     pub created: u64,
     pub session_id: Option<String>,
     pub account: Option<String>,
+    pub host: Option<String>,
     pub alive: bool,
     pub paused: bool,
     pub state: String,
@@ -121,12 +196,27 @@ pub fn list_instances() -> Vec<InstanceView> {
     let mut reg = read_reg();
     let mut dirty = false;
     let mut out = Vec::new();
-    let panes = pane_map();
+    // One pane map and one state sweep per host in the fleet, not per instance: the poll runs
+    // every second, and a remote call costs a round trip even with a reused ssh channel.
+    let hosts_in_use: Vec<Option<String>> = {
+        let mut v: Vec<Option<String>> = reg.iter().map(|i| i.host.clone()).collect();
+        v.push(None); // this machine is always polled, even with no local instances left
+        v.sort();
+        v.dedup();
+        v
+    };
+    let panes_by_host = crate::tmux::pane_maps(&hosts_in_use);
+    let states_by_host: std::collections::HashMap<String, std::collections::HashMap<String, HookState>> =
+        hosts_in_use.iter().flatten().map(|h| (h.clone(), remote_states(h))).collect();
     for inst in reg.iter_mut() {
+        let host = inst.host.clone();
         let sess = sess_name(&inst.id);
-        let pane = panes.get(&sess).copied();
+        let pane = panes_by_host.get(&host).and_then(|m| m.get(&sess)).copied();
         let alive = pane.is_some();
-        let hs = read_state(&inst.id);
+        let hs = match &host {
+            None => read_state(&inst.id),
+            Some(h) => states_by_host.get(h).and_then(|m| m.get(&inst.id)).cloned().unwrap_or_default(),
+        };
         // The hook is the only place a resume id ever appears; persist it once seen.
         if hs.session_id.is_some() && hs.session_id != inst.session_id {
             inst.session_id = hs.session_id.clone();
@@ -137,7 +227,7 @@ pub fn list_instances() -> Vec<InstanceView> {
             inst.account = hs.account.clone();
             dirty = true;
         }
-        let paused = pane.map(is_frozen).unwrap_or(false);
+        let paused = pane.map(|p| crate::tmux::is_frozen_on(host.as_deref(), p)).unwrap_or(false);
         let state = if !alive {
             "dead".to_string()
         } else if paused {
@@ -154,6 +244,7 @@ pub fn list_instances() -> Vec<InstanceView> {
             created: inst.created,
             session_id: inst.session_id.clone(),
             account: inst.account.clone(),
+            host: host.clone(),
             alive,
             paused,
             state,
@@ -185,20 +276,32 @@ pub fn launch_in(
     name: String,
     group: Option<String>,
     own_tile: bool,
+    host: Option<String>,
 ) -> Result<InstanceView, String> {
-    if !PathBuf::from(&cwd).is_dir() {
-        return Err(format!("no such directory: {}", cwd));
+    let host = host.filter(|h| !h.trim().is_empty());
+    let hostref = host.as_deref();
+    if !crate::hosts::reachable(hostref) {
+        return Err(format!(
+            "{} is not answering; check the cable and that its WSL is running",
+            host.unwrap_or_default()
+        ));
+    }
+    if !dir_exists(hostref, &cwd) {
+        return Err(match hostref {
+            None => format!("no such directory: {}", cwd),
+            Some(h) => format!("no such directory on {}: {}", h, cwd),
+        });
     }
     // Canonicalize on the way in. The registry owns directory intent, and every transcript
     // lookup derives Claude's project slug from this exact string, so `.`, a trailing slash or
     // a symlinked spelling would launch fine and then find no history, no usage and no handoff.
-    let cwd = fs::canonicalize(&cwd)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or(cwd);
+    // A remote path has to be resolved on the machine that owns it, so `readlink -f` stands in
+    // for fs::canonicalize there.
+    let cwd = canonical_on(hostref, &cwd).unwrap_or(cwd);
     let id = format!("{:x}", SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0) % 0xffff_ffff);
     let sess = sess_name(&id);
     let reg_now = read_reg();
-    let base = git_group(&cwd);
+    let base = crate::tmux::git_group_on(hostref, &cwd);
     let group = match group {
         Some(g) if !g.trim().is_empty() => g,
         _ if own_tile => unique_group(&base, &reg_now),
@@ -206,7 +309,12 @@ pub fn launch_in(
     };
     let name = if name.trim().is_empty() { base.clone() } else { name };
 
-    let ok = tmux(&[
+    // Server options are per tmux server, so a remote server needs its own pass before its first
+    // session is created: history-limit is read when a pane is born and cannot be raised later.
+    if hostref.is_some() {
+        crate::tmux::ensure_server_options_on(hostref);
+    }
+    let ok = crate::tmux::tmux_on(hostref, &[
         "new-session", "-d", "-s", &sess, "-c", &cwd,
         "-e", &format!("ATHENA_ID={}", id),
         "-e", &format!("ATHENA_NAME={}", name),
@@ -221,11 +329,11 @@ pub fn launch_in(
     // card to reach it.
     // A claude launch goes to whichever account has allowance left, "a" first.
     let account = crate::accounts::choose("a").unwrap_or_else(|| "a".into());
-    let delivered = tmux(&["send-keys", "-t", &sess, &crate::accounts::on_account(&account, &cmd), "Enter"])
+    let delivered = crate::tmux::tmux_on(hostref, &["send-keys", "-t", &sess, &crate::accounts::on_account(&account, &cmd), "Enter"])
         .map(|o| o.status.success())
         .unwrap_or(false);
 
-    let inst = Instance { id, name, cwd, group, cmd, session_id: None, account: Some(account), created: now() };
+    let inst = Instance { id, name, cwd, group, cmd, session_id: None, account: Some(account), host: host.clone(), created: now() };
     let mut reg = read_reg();
     reg.push(inst.clone());
     write_reg(&reg);
@@ -248,11 +356,12 @@ pub fn launch_in(
 pub fn restore(id: String) -> Result<(), String> {
     let reg = read_reg();
     let inst = reg.iter().find(|i| i.id == id).ok_or("unknown instance")?;
+    let hostref = inst.host.as_deref();
     let sess = sess_name(&id);
-    if tmux_alive(&sess) {
+    if crate::tmux::tmux_alive_on(hostref, &sess) {
         return Ok(());
     }
-    let ok = tmux(&[
+    let ok = crate::tmux::tmux_on(hostref, &[
         "new-session", "-d", "-s", &sess, "-c", &inst.cwd,
         "-e", &format!("ATHENA_ID={}", id),
         "-e", &format!("ATHENA_NAME={}", inst.name),
@@ -266,7 +375,7 @@ pub fn restore(id: String) -> Result<(), String> {
     // event, that stale record would be read as live state: a restored session showing `working`
     // from the previous run, a false needs-you notification, and an auto-pause decision taken on
     // a state nothing is producing any more.
-    let _ = fs::remove_file(athena_dir().join("state").join(format!("{}.json", id)));
+    clear_state(hostref, &id);
 
     let line = match (&inst.session_id, inst.cmd.as_str()) {
         (Some(sid), c) if c.starts_with("claude") => format!("claude --resume {}", sid),
@@ -274,7 +383,7 @@ pub fn restore(id: String) -> Result<(), String> {
     };
     let pref = inst.account.as_deref().unwrap_or("a");
     let line = crate::accounts::on_account(&crate::accounts::choose(pref).unwrap_or_else(|| pref.into()), &line);
-    if !tmux(&["send-keys", "-t", &sess, &line, "Enter"]).map(|o| o.status.success()).unwrap_or(false) {
+    if !crate::tmux::tmux_on(hostref, &["send-keys", "-t", &sess, &line, "Enter"]).map(|o| o.status.success()).unwrap_or(false) {
         return Err(format!("the session was recreated but `{}` could not be sent to it", line));
     }
     Ok(())
@@ -286,13 +395,15 @@ pub fn restore(id: String) -> Result<(), String> {
 /// no route back to it through Athena.
 #[tauri::command]
 pub fn close(id: String) -> Result<(), String> {
+    let host = instance_host(&id);
+    let hostref = host.as_deref();
     let sess = sess_name(&id);
-    match tmux(&["kill-session", "-t", &sess]) {
+    match crate::tmux::tmux_on(hostref, &["kill-session", "-t", &sess]) {
         // tmux is not reachable at all, so nothing was killed and nothing may be forgotten.
         None => return Err("tmux is not on PATH; nothing was closed".into()),
         // A failure here is almost always "session not found", which is the desired end state.
         // Anything else is only a problem if the session is in fact still alive.
-        Some(o) if !o.status.success() && tmux_alive(&sess) => {
+        Some(o) if !o.status.success() && crate::tmux::tmux_alive_on(hostref, &sess) => {
             let e = String::from_utf8_lossy(&o.stderr).trim().to_string();
             return Err(format!(
                 "{} is still running and was not closed: {}",
@@ -302,7 +413,7 @@ pub fn close(id: String) -> Result<(), String> {
         }
         _ => {}
     }
-    let _ = fs::remove_file(athena_dir().join("state").join(format!("{}.json", id)));
+    clear_state(hostref, &id);
     let reg: Vec<Instance> = read_reg().into_iter().filter(|i| i.id != id).collect();
     write_reg(&reg);
     Ok(())
@@ -310,8 +421,10 @@ pub fn close(id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn set_paused(id: String, paused: bool) -> Result<(), String> {
-    let pane = pane_pid(&sess_name(&id)).ok_or("no live tmux pane")?;
-    set_frozen(pane, paused)
+    let host = instance_host(&id);
+    let hostref = host.as_deref();
+    let pane = crate::tmux::pane_pid_on(hostref, &sess_name(&id)).ok_or("no live tmux pane")?;
+    crate::tmux::set_frozen_on(hostref, pane, paused)
 }
 
 /// Deliver one prompt and submit it. Multi-line text is pasted as a single prompt rather
@@ -319,16 +432,18 @@ pub fn set_paused(id: String, paused: bool) -> Result<(), String> {
 /// distinction so every caller that sends prose gets the same behaviour.
 #[tauri::command]
 pub fn send_text(id: String, text: String) -> Result<(), String> {
+    let host = instance_host(&id);
+    let hostref = host.as_deref();
     let sess = sess_name(&id);
-    if !tmux_alive(&sess) {
+    if !crate::tmux::tmux_alive_on(hostref, &sess) {
         return Err("not running".into());
     }
-    send_block(&sess, &id, &text)
+    crate::tmux::send_block_on(hostref, &sess, &id, &text)
 }
 
 #[tauri::command]
 pub fn send_key(id: String, key: String) -> Result<(), String> {
-    tmux(&["send-keys", "-t", &sess_name(&id), &key]);
+    crate::tmux::tmux_on(instance_host(&id).as_deref(), &["send-keys", "-t", &sess_name(&id), &key]);
     Ok(())
 }
 
@@ -347,6 +462,23 @@ fn offerable(path: &std::path::Path) -> bool {
         Some(n) => !n.starts_with('.') && n != "node_modules",
         None => false,
     }
+}
+
+/// The same two-level repo list, from a remote host.
+///
+/// `find` does the walk there rather than shipping a directory listing per level over ssh. The
+/// same exclusions as `offerable`: nothing hidden, no node_modules.
+#[tauri::command]
+pub fn list_repos_on(host: Option<String>) -> Vec<String> {
+    let Some(h) = host.filter(|h| !h.trim().is_empty()) else { return list_repos() };
+    let script = r#"root="$HOME/Documents/GitHub"
+[ -d "$root" ] || exit 0
+find "$root" -mindepth 1 -maxdepth 2 -type d \
+  -not -path '*/.*' -not -name node_modules -not -path '*/node_modules/*' | sort"#;
+    crate::hosts::run(Some(&h), "sh", &["-c", script])
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(|l| l.to_string()).collect())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -414,8 +546,10 @@ pub fn set_group(id: String, group: String) -> Result<(), String> {
 /// on its own once the user reaches the bottom again.
 #[tauri::command]
 pub fn tmux_scroll(id: String, lines: i32) -> Result<bool, String> {
+    let host = instance_host(&id);
+    let hostref = host.as_deref();
     let sess = sess_name(&id);
-    if !tmux_alive(&sess) {
+    if !crate::tmux::tmux_alive_on(hostref, &sess) {
         return Err("not running".into());
     }
     if lines == 0 {
@@ -437,7 +571,7 @@ pub fn tmux_scroll(id: String, lines: i32) -> Result<bool, String> {
     let cancel = format!("send-keys -t {} -X cancel", sess);
     // The chain ends by reporting whether the pane is STILL in copy mode, so the caller knows
     // when the pane went live again without paying for another invocation to ask.
-    let out = tmux(&[
+    let out = crate::tmux::tmux_on(hostref, &[
         "copy-mode", "-e", "-t", &sess,
         ";",
         "send-keys", "-t", &sess, "-X", "-N", &n, verb,
@@ -457,6 +591,6 @@ pub fn tmux_scroll(id: String, lines: i32) -> Result<bool, String> {
 /// Called when the user types after scrolling, so keys reach the agent and not copy mode.
 #[tauri::command]
 pub fn end_scroll(id: String) -> Result<(), String> {
-    crate::tmux::end_copy_mode(&sess_name(&id));
+    crate::tmux::end_copy_mode_on(instance_host(&id).as_deref(), &sess_name(&id));
     Ok(())
 }

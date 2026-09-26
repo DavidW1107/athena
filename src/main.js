@@ -30,7 +30,7 @@ const $ = (s) => document.querySelector(s);
 let launcher = null;
 
 const grid = mountGrid($('#grid-host'), {
-  onNewInTile: ({ group, cwd, cmd }) => launcher?.open({ group, cwd, cmd }),
+  onNewInTile: ({ group, cwd, cmd, host }) => launcher?.open({ group, cwd, cmd, host }),
 });
 
 // Files dragged in from the file manager. A tile gets the paths typed into its terminal at

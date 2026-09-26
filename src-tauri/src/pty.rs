@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use tauri::{Emitter, Manager, State};
 
-use crate::tmux::{sess_name, tmux_alive};
+use crate::tmux::sess_name;
 
 pub struct PtyHandle {
     pub master: Box<dyn MasterPty + Send>,
@@ -29,8 +29,10 @@ static GEN: AtomicU64 = AtomicU64::new(1);
 
 #[tauri::command]
 pub fn attach(app: tauri::AppHandle, ptys: State<PtyStore>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    let host = crate::registry::instance_host(&id);
+    let hostref = host.as_deref();
     let sess = sess_name(&id);
-    if !tmux_alive(&sess) {
+    if !crate::tmux::tmux_alive_on(hostref, &sess) {
         return Err("session not running".into());
     }
     let mut map = ptys.0.lock().map_err(|e| e.to_string())?;
@@ -40,10 +42,30 @@ pub fn attach(app: tauri::AppHandle, ptys: State<PtyStore>, id: String, cols: u1
     let pair = native_pty_system()
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| e.to_string())?;
-    let mut cmd = CommandBuilder::new("tmux");
-    cmd.arg("attach");
-    cmd.arg("-t");
-    cmd.arg(&sess);
+    // A remote attach is ssh carrying the same tmux client, so the tile still owns one pty and
+    // everything downstream (the reader thread, resize, refresh) is unchanged.
+    //
+    // `-tt` forces a tty even though ssh's stdin here is a pty rather than a terminal it
+    // recognises, and without it tmux exits at once with "open terminal failed". TERM is set in
+    // the remote command line rather than passed as an environment variable, because sshd only
+    // accepts the variables its config lists and TERM is not one of them.
+    let mut cmd = match hostref {
+        None => {
+            let mut c = CommandBuilder::new("tmux");
+            c.arg("attach");
+            c.arg("-t");
+            c.arg(&sess);
+            c
+        }
+        Some(h) => {
+            let mut c = CommandBuilder::new("ssh");
+            for a in ["-tt", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", h] {
+                c.arg(a);
+            }
+            c.arg(format!("TERM=xterm-256color tmux attach -t {}", crate::hosts::sh_quote(&sess)));
+            c
+        }
+    };
     cmd.env("TERM", "xterm-256color");
     // Athena is a terminal tool and is often launched from inside tmux. An inherited $TMUX makes
     // the client refuse to nest ("sessions should be nested with care"), and it would exit
@@ -124,17 +146,28 @@ pub fn pty_resize(ptys: State<PtyStore>, id: String, cols: u16, rows: u16) -> Re
 /// the attach child's pid because portable-pty does not expose the slave tty name.
 #[tauri::command]
 pub fn pty_refresh(ptys: State<PtyStore>, id: String) -> Result<(), String> {
-    let pid = {
-        let map = ptys.0.lock().map_err(|e| e.to_string())?;
-        map.get(&id).ok_or("not attached")?.child.process_id().ok_or("attach client has no pid")?
+    let host = crate::registry::instance_host(&id);
+    let hostref = host.as_deref();
+    let sess = sess_name(&id);
+    // A remote attach's local pid is ssh's, while the tmux client on the far side is a different
+    // process, so the pid match cannot cross the link. There the client is found by the session it
+    // is attached to instead.
+    // ponytail: assumes Athena is the only client on a remote session, which it is unless you
+    // attach to it yourself from a terminal; per-client identity would need the pid passed through.
+    let key = match hostref {
+        None => {
+            let map = ptys.0.lock().map_err(|e| e.to_string())?;
+            map.get(&id).ok_or("not attached")?.child.process_id().ok_or("attach client has no pid")?.to_string()
+        }
+        Some(_) => sess.clone(),
     };
-    let out = crate::tmux::tmux(&["list-clients", "-F", "#{client_pid} #{client_name}"]).ok_or("tmux list-clients failed")?;
-    let pid = pid.to_string();
+    let field = if hostref.is_some() { "#{client_session} #{client_name}" } else { "#{client_pid} #{client_name}" };
+    let out = crate::tmux::tmux_on(hostref, &["list-clients", "-F", field]).ok_or("tmux list-clients failed")?;
     let name = String::from_utf8_lossy(&out.stdout)
         .lines()
-        .find_map(|l| l.split_once(' ').filter(|(p, _)| *p == pid).map(|(_, n)| n.to_string()))
+        .find_map(|l| l.split_once(' ').filter(|(p, _)| *p == key).map(|(_, n)| n.to_string()))
         .ok_or("attach client not found in tmux")?;
-    crate::tmux::tmux_run(&["refresh-client", "-t", &name])
+    crate::tmux::tmux_run_on(hostref, &["refresh-client", "-t", &name])
 }
 
 /// Append one line to ~/.athena/ui.log. The webview's console goes nowhere in a release

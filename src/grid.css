@@ -406,3 +406,17 @@
 }
 
 .tile-note-btn[aria-pressed='true']:hover:not(:disabled) { background: var(--held-edge); color: var(--ink); }
+
+/* Which machine an instance runs on. Only remote instances carry it, so it reads as an
+   exception rather than a label every tab has to spend width on. */
+.tile-tab-host {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--line, #3a3a3a);
+  border-radius: 3px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}

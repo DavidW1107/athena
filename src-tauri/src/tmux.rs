@@ -1,32 +1,52 @@
 // tmux owns session lifetime; this module is the only place that shells out to it,
 // plus the cgroup freezer used to pause a pane.
+//
+// Every call takes a host (see hosts.rs), because an instance may live on this machine or on the
+// desktop over ssh. The `_on` functions are the real ones; the bare names are local wrappers kept
+// so callers that can only ever mean this machine stay unchanged.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Command;
+
+use crate::hosts::{self, Host};
+
+pub fn tmux_on(host: Host, args: &[&str]) -> Option<std::process::Output> {
+    hosts::run(host, "tmux", args)
+}
 
 pub fn tmux(args: &[&str]) -> Option<std::process::Output> {
-    Command::new("tmux").args(args).output().ok()
+    tmux_on(None, args)
 }
 
 pub fn sess_name(id: &str) -> String {
     format!("athena_{}", id)
 }
 
-pub fn tmux_alive(sess: &str) -> bool {
-    tmux(&["has-session", "-t", sess]).map(|o| o.status.success()).unwrap_or(false)
+pub fn tmux_alive_on(host: Host, sess: &str) -> bool {
+    tmux_on(host, &["has-session", "-t", sess]).map(|o| o.status.success()).unwrap_or(false)
 }
 
-pub fn pane_pid(sess: &str) -> Option<i32> {
-    let o = tmux(&["list-panes", "-t", sess, "-F", "#{pane_pid}"])?;
+pub fn tmux_alive(sess: &str) -> bool {
+    tmux_alive_on(None, sess)
+}
+
+pub fn pane_pid_on(host: Host, sess: &str) -> Option<i32> {
+    let o = tmux_on(host, &["list-panes", "-t", sess, "-F", "#{pane_pid}"])?;
     String::from_utf8_lossy(&o.stdout).lines().next()?.trim().parse().ok()
 }
 
-/// One tmux call for the whole fleet: session name -> first pane pid.
+pub fn pane_pid(sess: &str) -> Option<i32> {
+    pane_pid_on(None, sess)
+}
+
+/// One tmux call per host: session name -> first pane pid.
 /// The poll runs every second, so per-instance `has-session` calls are not affordable.
-pub fn pane_map() -> HashMap<String, i32> {
+///
+/// A pid is only meaningful on the host that reported it, so the two maps are never merged: the
+/// caller keeps one per host and looks up each instance in its own.
+pub fn pane_map_on(host: Host) -> HashMap<String, i32> {
     let mut m = HashMap::new();
-    if let Some(o) = tmux(&["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"]) {
+    if let Some(o) = tmux_on(host, &["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"]) {
         for line in String::from_utf8_lossy(&o.stdout).lines() {
             if let Some((sess, pid)) = line.split_once(' ') {
                 if let Ok(pid) = pid.trim().parse::<i32>() {
@@ -36,6 +56,15 @@ pub fn pane_map() -> HashMap<String, i32> {
         }
     }
     m
+}
+
+pub fn pane_map() -> HashMap<String, i32> {
+    pane_map_on(None)
+}
+
+/// One pane map per host the fleet uses, so a lookup is always against the machine the pid is on.
+pub fn pane_maps(hosts: &[Option<String>]) -> HashMap<Option<String>, HashMap<String, i32>> {
+    hosts.iter().map(|h| (h.clone(), pane_map_on(h.as_deref()))).collect()
 }
 
 /// The cgroup tmux made for one pane, from the text of `/proc/<pid>/cgroup`.
@@ -51,15 +80,19 @@ fn spawn_scope(proc_cgroup: &str) -> Option<PathBuf> {
     Some(PathBuf::from("/sys/fs/cgroup").join(rel.trim_start_matches('/')))
 }
 
-fn pane_scope(pane: i32) -> Option<PathBuf> {
-    spawn_scope(&std::fs::read_to_string(format!("/proc/{}/cgroup", pane)).ok()?)
+fn pane_scope_on(host: Host, pane: i32) -> Option<PathBuf> {
+    spawn_scope(&hosts::read_file(host, &format!("/proc/{}/cgroup", pane))?)
+}
+
+pub fn is_frozen_on(host: Host, pane: i32) -> bool {
+    pane_scope_on(host, pane)
+        .and_then(|d| hosts::read_file(host, &d.join("cgroup.freeze").to_string_lossy()))
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false)
 }
 
 pub fn is_frozen(pane: i32) -> bool {
-    pane_scope(pane)
-        .and_then(|d| std::fs::read_to_string(d.join("cgroup.freeze")).ok())
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false)
+    is_frozen_on(None, pane)
 }
 
 /// Pause or resume a pane by freezing its cgroup.
@@ -73,17 +106,22 @@ pub fn is_frozen(pane: i32) -> bool {
 ///
 /// A frozen task is not a stopped one. Neither bash nor tmux is told anything (tmux would
 /// SIGCONT a stopped pane process at once), and thawing is the whole of a resume.
-pub fn set_frozen(pane: i32, on: bool) -> Result<(), String> {
-    let dir = pane_scope(pane).ok_or("that pane has no cgroup of its own, so it cannot be paused safely")?;
-    std::fs::write(dir.join("cgroup.freeze"), if on { "1" } else { "0" })
+/// The freezer is per host: WSL on the desktop runs systemd too, so its tmux also gives every
+/// pane a `tmux-spawn-*.scope` and `cgroup.freeze` there is writable by the same user. A remote
+/// pause is therefore the identical operation, one ssh further away.
+pub fn set_frozen_on(host: Host, pane: i32, on: bool) -> Result<(), String> {
+    let dir = pane_scope_on(host, pane)
+        .ok_or("that pane has no cgroup of its own, so it cannot be paused safely")?;
+    hosts::write_file(host, &dir.join("cgroup.freeze").to_string_lossy(), if on { "1" } else { "0" })
         .map_err(|e| format!("could not write cgroup.freeze: {}", e))
 }
 
-pub fn git_group(cwd: &str) -> String {
-    let top = Command::new("git")
-        .args(["-C", cwd, "rev-parse", "--show-toplevel"])
-        .output()
-        .ok()
+pub fn set_frozen(pane: i32, on: bool) -> Result<(), String> {
+    set_frozen_on(None, pane, on)
+}
+
+pub fn git_group_on(host: Host, cwd: &str) -> String {
+    let top = hosts::run(host, "git", &["-C", cwd, "rev-parse", "--show-toplevel"])
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty());
@@ -94,18 +132,29 @@ pub fn git_group(cwd: &str) -> String {
         .unwrap_or(path)
 }
 
+pub fn git_group(cwd: &str) -> String {
+    git_group_on(None, cwd)
+}
+
 // ---------------------------------------------------------------- delivery
 
 /// One tmux call, mapped to a message rather than a bool so a failure can name itself.
-pub fn tmux_run(args: &[&str]) -> Result<(), String> {
-    match tmux(args) {
-        None => Err("tmux is not on PATH".into()),
+pub fn tmux_run_on(host: Host, args: &[&str]) -> Result<(), String> {
+    match tmux_on(host, args) {
+        None => Err(match host {
+            None => "tmux is not on PATH".into(),
+            Some(h) => format!("{} is not reachable, or tmux is not on its PATH", h),
+        }),
         Some(o) if o.status.success() => Ok(()),
         Some(o) => {
             let e = String::from_utf8_lossy(&o.stderr).trim().to_string();
             Err(if e.is_empty() { "tmux refused the command".into() } else { e })
         }
     }
+}
+
+pub fn tmux_run(args: &[&str]) -> Result<(), String> {
+    tmux_run_on(None, args)
 }
 
 /// Deliver `text` into a pane as ONE prompt, then submit it exactly once.
@@ -125,22 +174,29 @@ pub fn tmux_run(args: &[&str]) -> Result<(), String> {
 /// pane, versus text reached it and was never submitted.
 ///
 /// `tag` only names the scratch buffer; it is reduced to ASCII alphanumerics.
-pub fn send_block(sess: &str, tag: &str, text: &str) -> Result<(), String> {
+///
+/// The buffer lives in the tmux SERVER, so staging and pasting have to reach the same one: both
+/// calls take the same host, and a remote paste never stages its text on this machine.
+pub fn send_block_on(host: Host, sess: &str, tag: &str, text: &str) -> Result<(), String> {
     if text.contains('\n') {
         let safe: String = tag.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
         let buf = format!("athena_paste_{}", safe);
-        tmux_run(&["set-buffer", "-b", &buf, "--", text])
+        tmux_run_on(host, &["set-buffer", "-b", &buf, "--", text])
             .map_err(|e| format!("nothing sent, buffer not staged: {}", e))?;
-        tmux_run(&["paste-buffer", "-d", "-p", "-b", &buf, "-t", sess]).map_err(|e| {
-            let _ = tmux(&["delete-buffer", "-b", &buf]);
+        tmux_run_on(host, &["paste-buffer", "-d", "-p", "-b", &buf, "-t", sess]).map_err(|e| {
+            let _ = tmux_on(host, &["delete-buffer", "-b", &buf]);
             format!("nothing sent, paste failed: {}", e)
         })?;
     } else {
-        tmux_run(&["send-keys", "-t", sess, "-l", "--", text])
+        tmux_run_on(host, &["send-keys", "-t", sess, "-l", "--", text])
             .map_err(|e| format!("nothing sent: {}", e))?;
     }
-    tmux_run(&["send-keys", "-t", sess, "Enter"])
+    tmux_run_on(host, &["send-keys", "-t", sess, "Enter"])
         .map_err(|e| format!("text is in the pane but was not submitted: {}", e))
+}
+
+pub fn send_block(sess: &str, tag: &str, text: &str) -> Result<(), String> {
+    send_block_on(None, sess, tag, text)
 }
 
 /// Server options Athena wants in place before it creates any session.
@@ -148,18 +204,22 @@ pub fn send_block(sess: &str, tag: &str, text: &str) -> Result<(), String> {
 /// tmux defaults to 2000 lines of history, which is thin for reading back through an agent
 /// conversation. This is a server-wide option read when a pane is CREATED, so it has to be set
 /// before new-session; raising it later does not affect panes that already exist.
-pub fn ensure_server_options() {
-    let _ = tmux(&["set-option", "-g", "history-limit", "50000"]);
+pub fn ensure_server_options_on(host: Host) {
+    let _ = tmux_on(host, &["set-option", "-g", "history-limit", "50000"]);
     // tmux draws its own status line at the bottom of every pane: green, session name left,
     // window name and date right. Inside a tile that reads as a coloured bar under the
     // terminal, and it was also what smeared down the screen when copy mode was thrashing,
     // because it is repainted on every mode change. Athena's own header already carries the
     // session name and state, so the status line is duplicate chrome costing a row per pane.
-    let _ = tmux(&["set-option", "-g", "status", "off"]);
+    let _ = tmux_on(host, &["set-option", "-g", "status", "off"]);
     // The pane follows the attached client's size, which is how a tile going fullscreen turns
     // into a SIGWINCH and a redraw at the new width. Without it a pane can stay pinned to the
     // size it was created at and the text never reflows.
-    let _ = tmux(&["set-option", "-g", "window-size", "latest"]);
+    let _ = tmux_on(host, &["set-option", "-g", "window-size", "latest"]);
+}
+
+pub fn ensure_server_options() {
+    ensure_server_options_on(None);
 }
 
 /// Leave copy mode if the pane is in it, so typing after a scroll reaches the application.
@@ -167,14 +227,15 @@ pub fn ensure_server_options() {
 /// Without this the wheel creates a new trap: scroll up, type, and the keys are eaten by
 /// copy-mode bindings instead of reaching Claude. `send-keys -X` is an error outside copy mode,
 /// so the mode is checked first rather than firing blind.
-pub fn end_copy_mode(sess: &str) {
-    let in_mode = tmux(&["display-message", "-t", sess, "-p", "#{pane_in_mode}"])
+pub fn end_copy_mode_on(host: Host, sess: &str) {
+    let in_mode = tmux_on(host, &["display-message", "-t", sess, "-p", "#{pane_in_mode}"])
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
         .unwrap_or(false);
     if in_mode {
-        let _ = tmux(&["send-keys", "-t", sess, "-X", "cancel"]);
+        let _ = tmux_on(host, &["send-keys", "-t", sess, "-X", "cancel"]);
     }
 }
+
 
 #[cfg(test)]
 mod tests {

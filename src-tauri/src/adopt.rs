@@ -107,6 +107,9 @@ pub fn adopt_session(session: String, name: String) -> Result<InstanceView, Stri
     register(Instance {
         id,
         name: display,
+        // Adoption takes over a session that is already running here, so it is local by
+        // definition. Adopting one on the desktop needs the dialog to list remote sessions first.
+        host: None,
         cwd: found.cwd.clone(),
         group: git_group(&found.cwd),
         cmd: found.command,
@@ -323,6 +326,7 @@ pub fn adopt_process(pid: i32, name: String) -> Result<InstanceView, String> {
     register(Instance {
         id,
         name: display,
+        host: None,
         cwd: cwd.clone(),
         group: git_group(&cwd),
         cmd: leaf,
@@ -542,6 +546,8 @@ pub fn import_agent(
         name,
         None,
         false,
+        // An imported session's transcript is on this machine, so the resume has to be too.
+        None,
     )?;
     if !stopped {
         // The tile is up and usable, so this is a warning rather than a failure, but the user

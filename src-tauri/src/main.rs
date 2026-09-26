@@ -15,6 +15,7 @@ mod broadcast;
 mod clipboard;
 mod cost;
 mod handoff;
+mod hosts;
 mod lanes;
 mod pty;
 mod registry;
@@ -47,6 +48,8 @@ fn main() {
             registry::send_text,
             registry::send_key,
             registry::list_repos,
+            registry::list_repos_on,
+            hosts::list_hosts,
             adopt::list_adoptable_sessions,
             adopt::adopt_session,
             adopt::list_adoptable_processes,

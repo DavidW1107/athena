@@ -134,7 +134,7 @@ export function mountGrid(host, opts = {}) {
     plus.onclick = (e) => {
       e.stopPropagation();
       const any = store.getInstances().find((i) => i.group === group);
-      opts.onNewInTile?.({ group, cwd: any ? any.cwd : '', cmd: any ? any.cmd : '' });
+      opts.onNewInTile?.({ group, cwd: any ? any.cwd : '', cmd: any ? any.cmd : '', host: any ? any.host : null });
     };
 
     // The terminal's real character grid, shown because "did this actually resize" was
@@ -729,6 +729,9 @@ export function mountGrid(host, opts = {}) {
 
   /** " · B" for an instance on a second subscription; account "a" is the default and unmarked. */
   const acctTag = (i) => (i.account && i.account !== 'a' ? ` · ${i.account.toUpperCase()}` : '');
+  // Which machine it runs on. Local instances say nothing, because that is still almost all of
+  // them and a badge on every tab would be noise; a remote one names its host.
+  const hostTag = (i) => (i.host ? ` · ${i.host}` : '');
 
   function renderTile(tile) {
     const members = store
@@ -744,10 +747,11 @@ export function mountGrid(host, opts = {}) {
       tab.setAttribute('role', 'tab');
       tab.setAttribute('aria-selected', String(i.id === tile.activeId));
       const iState = effectiveState(i);
-      tab.title = `${i.name}: ${stateLabel(iState)}${acctTag(i)}`;
+      tab.title = `${i.name}: ${stateLabel(iState)}${acctTag(i)}${hostTag(i)}`;
       const dot = el('span', 'tile-dot');
       dot.dataset.state = iState;
       tab.append(dot, el('span', 'tile-tab-name', i.name + acctTag(i)));
+      if (i.host) tab.append(el('span', 'tile-tab-host', i.host));
       tab.onclick = (e) => {
         e.stopPropagation();
         if (i.id !== tile.activeId) setActive(tile, i.id);

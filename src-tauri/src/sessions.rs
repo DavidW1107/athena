@@ -195,6 +195,7 @@ pub fn past_sessions(cwd: String) -> Vec<PastSession> {
 pub fn resume_session(cwd: String, session_id: String, name: String) -> Result<InstanceView, String> {
     // A resumed conversation is a new instance and gets its own tile.
     // A resumed session belongs with its repo, not in a tile of its own.
-    let v = launch_in(cwd, format!("claude --resume {}", session_id), name, None, false)?;
+    // The transcript being resumed lives on this machine, so the instance does too.
+    let v = launch_in(cwd, format!("claude --resume {}", session_id), name, None, false, None)?;
     Ok(v)
 }
