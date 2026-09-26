@@ -18,6 +18,7 @@ import { mountAdopt } from './adopt.js';
 import { mountAutopause } from './autopause.js';
 import { mountBroadcast } from './broadcast.js';
 import { mountCost } from './cost.js';
+import { mountLimits } from './limits.js';
 import { mountFileDrop } from './filedrop.js';
 import { mountHandoff } from './handoff.js';
 import { mountReport } from './report.js';
@@ -111,6 +112,7 @@ store.subscribe(({ changed }) => {
 
 mountBroadcast($('#mount-broadcast'));
 mountCost($('#mount-cost'));
+mountLimits($('#mount-limits'));
 mountHandoff($('#mount-handoff'));
 mountAutopause($('#mount-autopause'));
 

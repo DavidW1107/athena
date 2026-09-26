@@ -14,6 +14,7 @@ mod autopause;
 mod broadcast;
 mod clipboard;
 mod cost;
+mod limits;
 mod handoff;
 mod hosts;
 mod lanes;
@@ -64,6 +65,7 @@ fn main() {
             lanes::pbuild_resume_all,
             broadcast::send_many,
             cost::session_usage,
+            limits::account_limits,
             handoff::transcript_tail,
             handoff::handoff_send,
             autopause::autopause_config,
