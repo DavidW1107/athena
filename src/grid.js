@@ -828,7 +828,10 @@ export function mountGrid(host, opts = {}) {
     const instances = store.getInstances();
     const groups = new Set(instances.map((i) => i.group));
     // The live id set is already in hand here, so orphan notes cost no poll of their own.
-    pruneNotes(instances.map((i) => i.id));
+    // Never prune on an empty list: subscribe() fires once synchronously before the first
+    // poll lands, and pruning against that [] wiped every note on each launch.
+    // ponytail: an emptied fleet keeps its stale notes until the next instance appears.
+    if (instances.length) pruneNotes(instances.map((i) => i.id));
 
     for (const [g, tile] of [...tiles]) {
       if (groups.has(g)) continue;
