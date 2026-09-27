@@ -641,40 +641,59 @@ pub fn set_group(id: String, group: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Scroll the pane's own history.
+/// Scroll the pane's own history. Returns "copy" (pane left in copy mode), "live" (at the
+/// bottom, or nothing to do) or "app" (the application scrolled itself).
 ///
-/// A wheel event that reaches the application is not scrollback: Claude Code reads it as "cycle
-/// through past messages", which is why scrolling up walked the conversation instead of showing
-/// what had scrolled off. tmux copy-mode is the only thing that can show real history while an
-/// application is drawing the screen, so the wheel is translated into it. `-e` leaves copy mode
-/// on its own once the user reaches the bottom again.
+/// Two kinds of agent screen need two different scrolls. Claude Code's fullscreen renderer
+/// (the default since 2.1.x) draws in the alternate screen with mouse reporting on, so nothing
+/// ever scrolls off into tmux history: copy mode there shows an empty or stale buffer, which
+/// is what "scrolling stopped working" was. That app owns its transcript, so it gets real SGR
+/// wheel events and scrolls itself. The older inline renderer draws in the normal screen, where
+/// a forwarded wheel reads as "cycle through past messages", so there tmux copy mode is the
+/// only thing that shows real history. `-e` leaves copy mode once the user is back at the bottom.
 #[tauri::command]
-pub fn tmux_scroll(id: String, lines: i32) -> Result<bool, String> {
+pub fn tmux_scroll(id: String, lines: i32) -> Result<String, String> {
     let host = instance_host(&id);
     let hostref = host.as_deref();
     let sess = sess_name(&id);
-    if !crate::tmux::tmux_alive_on(hostref, &sess) {
+    if lines == 0 {
+        return Ok("live".into());
+    }
+    let state = crate::tmux::tmux_on(hostref, &[
+        "display-message", "-p", "-t", &sess, "#{pane_in_mode}#{alternate_on}#{mouse_sgr_flag}",
+    ])
+    .ok_or("tmux is not on PATH")?;
+    if !state.status.success() {
         return Err("not running".into());
     }
-    if lines == 0 {
-        return Ok(false);
+    let state = String::from_utf8_lossy(&state.stdout).trim().to_string();
+    if state == "011" {
+        // SGR wheel at row 1, col 1: button 64 is up, 65 is down. The app applies its own step
+        // per event, so a third of the line count keeps a mouse notch from leaping.
+        // ponytail: fixed 1/3 ratio; tune if Claude Code changes its per-event step.
+        let ev = if lines > 0 { "\x1b[<64;1;1M" } else { "\x1b[<65;1;1M" };
+        let n = (lines.unsigned_abs() / 3).clamp(1, 60) as usize;
+        let bytes = ev.repeat(n);
+        let hex: Vec<String> = bytes.bytes().map(|b| format!("{:02x}", b)).collect();
+        let mut args = vec!["send-keys", "-t", sess.as_str(), "-H"];
+        args.extend(hex.iter().map(|h| h.as_str()));
+        crate::tmux::tmux_on(hostref, &args).ok_or("tmux is not on PATH")?;
+        return Ok("app".into());
+    }
+    // Down with the pane already live has nowhere to go; entering copy mode for it would only
+    // make tmux enter, fail to move, leave and repaint, which smears a line down the screen.
+    if lines < 0 && !state.starts_with('1') {
+        return Ok("live".into());
     }
     let n = lines.unsigned_abs().clamp(1, 200).to_string();
     let verb = if lines > 0 { "scroll-up" } else { "scroll-down" };
-    // One tmux invocation, not two. tmux treats a bare ";" argument as a command separator,
-    // and every invocation is a process spawn: at trackpad event rates the old two-spawn
-    // version was firing hundreds of processes a second, which is what made scrolling lag
-    // and land in the wrong place.
-    // Reaching the bottom must LEAVE copy mode. A pane in copy mode is frozen: new output from
-    // the agent does not appear until the mode ends, so a scroll that finishes at the bottom
-    // and stays in copy mode leaves a terminal that looks dead. The `-e` flag only does this
-    // for tmux's own mouse handling, not for a synthetic scroll-down, so the exit is explicit.
-    // Still one invocation: tmux takes ";" as a command separator and if-shell -F tests a
-    // format without spawning a shell.
+    // One tmux invocation for the scroll itself: tmux treats a bare ";" argument as a command
+    // separator, and at trackpad event rates a spawn per step made scrolling lag and land in
+    // the wrong place. Reaching the bottom must LEAVE copy mode, because a pane in copy mode is
+    // frozen and looks dead; `-e` only does that for tmux's own mouse handling, so the exit is
+    // explicit. if-shell -F tests a format without spawning a shell.
     let at_bottom = format!("#{{==:#{{scroll_position}},0}}");
     let cancel = format!("send-keys -t {} -X cancel", sess);
-    // The chain ends by reporting whether the pane is STILL in copy mode, so the caller knows
-    // when the pane went live again without paying for another invocation to ask.
     let out = crate::tmux::tmux_on(hostref, &[
         "copy-mode", "-e", "-t", &sess,
         ";",
@@ -689,7 +708,7 @@ pub fn tmux_scroll(id: String, lines: i32) -> Result<bool, String> {
         let e = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(if e.is_empty() { "tmux refused the scroll".into() } else { e });
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim() == "1")
+    Ok(if String::from_utf8_lossy(&out.stdout).trim() == "1" { "copy" } else { "live" }.into())
 }
 
 /// Called when the user types after scrolling, so keys reach the agent and not copy mode.

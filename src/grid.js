@@ -556,21 +556,7 @@ export function mountGrid(host, opts = {}) {
    * slow trackpad movement still adds up instead of being rounded away to nothing.
    */
   function queueScroll(tile, deltaPx) {
-    // Scrolling DOWN while already at the bottom must do nothing at all. It used to enter
-    // copy mode, fail to move, and be cancelled again by the bottom check, so every downward
-    // notch made tmux enter and leave copy mode and repaint the pane. That thrash is what
-    // made a line smear down the screen.
-    if (!tile.scrolled && deltaPx > 0) return;
-
     tile.wheelPx = (tile.wheelPx || 0) + deltaPx;
-    if (!tile.scrolled) {
-      tile.scrolled = true;
-      tile.scrolledBadge.hidden = false;
-      // tmux draws its copy-mode cursor wherever the scroll has reached, which reads as the
-      // prompt cursor wandering up the history. Hiding it locally is best effort: a tmux
-      // redraw may put it back, and it is restored unconditionally when the scroll ends.
-      tile.term?.write('\x1b[?25l');
-    }
     if (tile.scrollTimer || tile.scrollBusy) return;
     tile.scrollTimer = setTimeout(flushScroll, 40, tile);
   }
@@ -580,15 +566,20 @@ export function mountGrid(host, opts = {}) {
     const lines = Math.trunc(tile.wheelPx / PX_PER_LINE);
     tile.wheelPx -= lines * PX_PER_LINE;
     if (!lines || !tile.activeId) return;
-    // Same guard on the flush path: a downward batch when the pane is already live has
-    // nowhere to go, and sending it would re-enter copy mode for nothing.
-    if (!tile.scrolled && lines > 0) return;
     tile.scrollBusy = true;
     try {
-      // The backend reports whether the pane is still in copy mode, so returning to the
-      // bottom puts the tile back to live without a second round trip to ask.
-      const stillScrolled = await tmuxScroll(tile.activeId, -lines);
-      if (!stillScrolled) clearScrolled(tile);
+      // The backend reports where the pane ended up, so returning to the bottom puts the tile
+      // back to live without a second round trip to ask.
+      const where = await tmuxScroll(tile.activeId, -lines);
+      if (where === 'copy') {
+        if (!tile.scrolled) {
+          tile.scrolled = true;
+          tile.scrolledBadge.hidden = false;
+          // tmux draws its copy-mode cursor wherever the scroll has reached, which reads as the
+          // prompt cursor wandering up the history. Best effort: restored when the scroll ends.
+          tile.term?.write('\x1b[?25l');
+        }
+      } else clearScrolled(tile);
     } catch {
       // A pane that went away mid-gesture is not worth reporting.
     } finally {

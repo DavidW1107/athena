@@ -180,12 +180,31 @@ export function createTerm(mountEl, opts = {}) {
   let watchdog = null;
   if (wb && typeof wb._action === 'function' && typeof wb._innerWrite === 'function') {
     const parse = wb._action;
+    // A throw means xterm's buffer is already corrupt (a line index past the end), and a
+    // corrupt buffer throws on EVERY later chunk: 326k throws were logged by 2026-09-27, each
+    // chunk skipped, which is the text that repeated and overwrote itself. Skipping alone never
+    // recovers, and a tmux repaint lands in the same broken buffer. So rebuild: detach resets
+    // the xterm, and a fresh attach makes tmux re-send the whole screen and every terminal mode.
+    let rebuilding = false;
+    const rebuild = async () => {
+      const id = attachedId;
+      try {
+        if (!id || disposed) return;
+        await detach();
+        await attach(id);
+      } finally {
+        rebuilding = false;
+      }
+    };
     wb._action = (data, promiseResult) => {
       try {
         return parse(data, promiseResult);
       } catch (err) {
-        uiLog(`parse threw on ${attachedId}: ${err} @ ${err?.stack} chunk=${JSON.stringify(String(data).slice(0, 600))}`);
-        repaint();
+        if (!rebuilding) {
+          rebuilding = true;
+          uiLog(`parse threw on ${attachedId}, rebuilding: ${err} chunk=${JSON.stringify(String(data).slice(0, 300))}`);
+          setTimeout(rebuild, 0); // not from inside the parse loop that just threw
+        }
         return undefined; // treated as a finished sync write, so the loop moves on
       }
     };
