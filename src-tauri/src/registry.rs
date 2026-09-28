@@ -237,11 +237,19 @@ pub struct InstanceView {
     pub idle_secs: u64,
 }
 
+fn merge_observed_account(original: &Option<String>, observed: &Option<String>, latest: &mut Option<String>) {
+    if latest == original {
+        *latest = observed.clone();
+    }
+}
+
 // ---------------------------------------------------------------- commands
 
 #[tauri::command]
 pub fn list_instances() -> Vec<InstanceView> {
     let mut reg = read_reg();
+    let original_accounts: HashMap<String, Option<String>> =
+        reg.iter().map(|instance| (instance.id.clone(), instance.account.clone())).collect();
     let mut dirty = false;
     let mut out = Vec::new();
     // One pane map and one state sweep per host in the fleet, not per instance: the poll runs
@@ -312,8 +320,8 @@ pub fn list_instances() -> Vec<InstanceView> {
         for inst in &reg {
             if let Some(cur) = latest.iter_mut().find(|i| i.id == inst.id) {
                 cur.session_id = inst.session_id.clone();
-                if cur.account.is_none() {
-                    cur.account = inst.account.clone();
+                if let Some(original) = original_accounts.get(&inst.id) {
+                    merge_observed_account(original, &inst.account, &mut cur.account);
                 }
             }
         }
@@ -390,8 +398,13 @@ pub fn launch_in(
     // The session exists from here on, so a delivery failure is reported with the instance
     // registered rather than thrown away: the user has a tmux session either way and needs the
     // card to reach it.
-    // A claude launch goes to whichever account has allowance left, "a" first.
-    let account = crate::accounts::choose("a").unwrap_or_else(|| "a".into());
+    // A Claude launch goes to whichever account has allowance left, "a" first. Other harnesses
+    // do not carry a Claude account label, even when every Claude profile is currently limited.
+    let account = if crate::accounts::uses_account(&cmd) {
+        crate::accounts::choose("a").unwrap_or_else(|| "a".into())
+    } else {
+        "a".into()
+    };
     let delivered = crate::tmux::tmux_on(hostref, &["send-keys", "-t", &sess, &crate::accounts::on_account(&account, &cmd), "Enter"])
         .map(|o| o.status.success())
         .unwrap_or(false);
@@ -448,7 +461,9 @@ pub fn restore(id: String) -> Result<(), String> {
         (Some(sid), c) if c.starts_with("claude") => format!("claude --resume {}", sid),
         _ => inst.cmd.clone(),
     };
-    let pref = inst.account.as_deref().unwrap_or("a");
+    let known_accounts = crate::accounts::accounts();
+    let saved_pref = inst.account.as_deref().unwrap_or("a");
+    let pref = if known_accounts.iter().any(|account| account == saved_pref) { saved_pref } else { "a" };
     let line = crate::accounts::on_account(&crate::accounts::choose(pref).unwrap_or_else(|| pref.into()), &line);
     if !crate::tmux::tmux_on(hostref, &["send-keys", "-t", &sess, &line, "Enter"]).map(|o| o.status.success()).unwrap_or(false) {
         return Err(format!("the session was recreated but `{}` could not be sent to it", line));
@@ -716,4 +731,31 @@ pub fn tmux_scroll(id: String, lines: i32) -> Result<String, String> {
 pub fn end_scroll(id: String) -> Result<(), String> {
     crate::tmux::end_copy_mode_on(instance_host(&id).as_deref(), &sess_name(&id));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_observed_account;
+
+    #[test]
+    fn hook_account_replaces_an_unchanged_stale_registry_account() {
+        let original = Some("shadow".to_string());
+        let observed = Some("a".to_string());
+        let mut latest = original.clone();
+
+        merge_observed_account(&original, &observed, &mut latest);
+
+        assert_eq!(latest.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn hook_account_does_not_overwrite_a_concurrent_switch() {
+        let original = Some("shadow".to_string());
+        let observed = Some("a".to_string());
+        let mut latest = Some("c".to_string());
+
+        merge_observed_account(&original, &observed, &mut latest);
+
+        assert_eq!(latest.as_deref(), Some("c"));
+    }
 }

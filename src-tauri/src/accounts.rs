@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
 use crate::adopt::terminate_and_wait;
@@ -29,14 +30,28 @@ fn valid(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
-/// Every account that can run: "a", then each logged-in ~/.claude-<x>, sorted.
-pub fn accounts() -> Vec<String> {
-    let mut rest: Vec<String> = fs::read_dir(home())
+/// Every account that can run: "a", then each logged-in thin profile, sorted.
+///
+/// A Claude config directory is not automatically an Athena account. Athena can only move a
+/// session safely when the profile shares the primary `projects` directory, as profiles created
+/// by `scripts/setup-account.sh` do. Standalone config directories are intentionally excluded.
+fn accounts_under(root: &Path) -> Vec<String> {
+    let primary_projects = fs::canonicalize(root.join(".claude/projects")).ok();
+    let mut rest: Vec<String> = fs::read_dir(root)
         .map(|rd| {
             rd.flatten()
                 .filter_map(|e| e.file_name().to_str()?.strip_prefix(".claude-").map(String::from))
                 .filter(|n| valid(n) && n != "a")
-                .filter(|n| home().join(format!(".claude-{}", n)).join(".credentials.json").is_file())
+                .filter(|n| {
+                    let profile = root.join(format!(".claude-{}", n));
+                    if !profile.join(".credentials.json").is_file() {
+                        return false;
+                    }
+                    match (&primary_projects, fs::canonicalize(profile.join("projects"))) {
+                        (Some(primary), Ok(projects)) => projects == *primary,
+                        _ => false,
+                    }
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -44,6 +59,10 @@ pub fn accounts() -> Vec<String> {
     let mut v = vec!["a".to_string()];
     v.extend(rest);
     v
+}
+
+pub fn accounts() -> Vec<String> {
+    accounts_under(&home())
 }
 
 /// The mark one machine wrote for one account, ignoring a reset that has already passed.
@@ -156,8 +175,12 @@ pub fn choose(pref: &str) -> Option<String> {
 /// "a" UNSETS the variable instead of pointing it at ~/.claude: with CLAUDE_CONFIG_DIR set, Claude
 /// reads its login from ~/.claude/.claude.json rather than ~/.claude.json, and account A would
 /// come up logged out. Unsetting also covers a tmux server that inherited a profile's variable.
+pub fn uses_account(line: &str) -> bool {
+    line == "claude" || line.starts_with("claude ")
+}
+
 pub fn on_account(acct: &str, line: &str) -> String {
-    if !(line == "claude" || line.starts_with("claude ")) {
+    if !uses_account(line) {
         return line.to_string();
     }
     if acct == "a" || !valid(acct) {
@@ -291,6 +314,28 @@ fn move_to(id: &str, from: &str, to: &str, sid: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn standalone_config_directories_are_not_accounts() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!("athena-accounts-{}-{}", std::process::id(), now()));
+        let primary_projects = root.join(".claude/projects");
+        fs::create_dir_all(&primary_projects).unwrap();
+
+        let managed = root.join(".claude-c");
+        fs::create_dir_all(&managed).unwrap();
+        fs::write(managed.join(".credentials.json"), "{}").unwrap();
+        symlink(&primary_projects, managed.join("projects")).unwrap();
+
+        let standalone = root.join(".claude-shadow");
+        fs::create_dir_all(standalone.join("projects")).unwrap();
+        fs::write(standalone.join(".credentials.json"), "{}").unwrap();
+
+        assert_eq!(accounts_under(&root), vec!["a".to_string(), "c".to_string()]);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn only_claude_lines_get_an_account() {
