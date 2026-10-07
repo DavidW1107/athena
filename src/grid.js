@@ -417,6 +417,7 @@ export function mountGrid(host, opts = {}) {
   function setActive(tile, id) {
     const gen = ++tile.gen;
     tile.activeId = id;
+    tile.liveId = id && store.getInstance(id)?.alive ? id : null;
     renderTile(tile);
 
     tile.chain = tile.chain.then(async () => {
@@ -862,12 +863,17 @@ export function mountGrid(host, opts = {}) {
 
     for (const [g, tile] of tiles) {
       const members = instances.filter((i) => i.group === g);
-      const stillThere = members.some((i) => i.id === tile.activeId);
-      if (!stillThere) {
+      const active = members.find((i) => i.id === tile.activeId);
+      if (!active) {
         // Prefer something alive so a tile does not open on a corpse when one exists.
         const next = members.find((i) => i.alive) || members[0];
         setActive(tile, next ? next.id : null);
+      } else if (active.alive && tile.liveId !== active.id) {
+        // It came alive under a tile that already tried it and found no session: the login
+        // restore recreates sessions while the grid is opening. Nothing else would attach it.
+        setActive(tile, active.id);
       } else {
+        if (!active.alive) tile.liveId = null;
         renderTile(tile);
       }
     }
