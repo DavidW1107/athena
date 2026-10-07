@@ -48,6 +48,23 @@ StartupWMClass=Athena
 DESKTOP
 chmod 644 "$desktop"
 
+# Open at login with every instance back: restore-all.py recreates each dead tmux session and
+# resumes its conversation, in the background so the window is not held up by it.
+autostart="$HOME/.config/autostart/athena.desktop"
+install -d "$(dirname "$autostart")"
+cat > "$autostart" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Athena
+Comment=Restore every instance, then open the grid
+Exec=$repo/scripts/login.sh
+Icon=athena
+Terminal=false
+StartupWMClass=Athena
+X-GNOME-Autostart-enabled=true
+DESKTOP
+chmod 644 "$autostart"
+
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
